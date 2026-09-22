@@ -177,6 +177,9 @@ Probe supports extraction for many other languages including:
 - **Ruby**: Methods, classes, modules, blocks
 - **PHP**: Functions, classes, namespaces, attributes
 - **Swift**: Functions, classes, structs, protocols, extensions
+- **Solidity**: Contracts, interfaces, libraries, functions, modifiers, events, errors
+- **Bash**: Functions, variable assignments, declarations
+- **QML**: Object definitions, properties, signals, bindings, embedded JS functions
 - **C#**: Methods, classes, interfaces, namespaces, attributes
 - **Markdown**: Sections, code blocks, lists, tables, frontmatter
 

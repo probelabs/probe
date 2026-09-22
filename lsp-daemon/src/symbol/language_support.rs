@@ -165,6 +165,30 @@ impl LanguageRules {
         }
     }
 
+    /// Create rules for Ruby
+    pub fn ruby() -> Self {
+        Self {
+            scope_separator: "::".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::RemoveParameterNames,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["rb".to_string(), "rake".to_string()],
+            signature_keywords: vec![
+                "def".to_string(),
+                "self".to_string(),
+                "class".to_string(),
+                "module".to_string(),
+                "private".to_string(),
+                "protected".to_string(),
+                "public".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
     /// Create rules for Go
     pub fn go() -> Self {
         Self {
@@ -338,6 +362,100 @@ impl LanguageRules {
                 "component".to_string(),
                 "import".to_string(),
                 "pragma".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
+    /// Create rules for Solidity
+    pub fn solidity() -> Self {
+        Self {
+            scope_separator: ".".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::RemoveParameterNames,
+            visibility_affects_uid: false,
+            default_visibility: "internal".to_string(),
+            file_extensions: vec!["sol".to_string()],
+            signature_keywords: vec![
+                "contract".to_string(),
+                "interface".to_string(),
+                "library".to_string(),
+                "function".to_string(),
+                "constructor".to_string(),
+                "modifier".to_string(),
+                "event".to_string(),
+                "error".to_string(),
+                "public".to_string(),
+                "external".to_string(),
+                "internal".to_string(),
+                "private".to_string(),
+                "view".to_string(),
+                "pure".to_string(),
+                "payable".to_string(),
+                "virtual".to_string(),
+                "override".to_string(),
+            ],
+            type_aliases: vec![
+                ("uint".to_string(), "uint256".to_string()),
+                ("int".to_string(), "int256".to_string()),
+            ],
+        }
+    }
+
+    /// Create rules for Crystal
+    pub fn crystal() -> Self {
+        Self {
+            scope_separator: "::".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::RemoveParameterNames,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["cr".to_string()],
+            signature_keywords: vec![
+                "module".to_string(),
+                "class".to_string(),
+                "struct".to_string(),
+                "enum".to_string(),
+                "def".to_string(),
+                "macro".to_string(),
+                "abstract".to_string(),
+                "private".to_string(),
+                "protected".to_string(),
+                "alias".to_string(),
+                "annotation".to_string(),
+                "lib".to_string(),
+                "fun".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
+    /// Create rules for Haskell
+    pub fn haskell() -> Self {
+        Self {
+            scope_separator: ".".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::None,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["hs".to_string(), "lhs".to_string()],
+            signature_keywords: vec![
+                "module".to_string(),
+                "import".to_string(),
+                "data".to_string(),
+                "newtype".to_string(),
+                "type".to_string(),
+                "class".to_string(),
+                "instance".to_string(),
+                "where".to_string(),
+                "foreign".to_string(),
+                "pattern".to_string(),
             ],
             type_aliases: vec![],
         }
@@ -528,12 +646,16 @@ impl LanguageRulesFactory {
             "typescript" | "ts" => Some(LanguageRules::typescript()),
             "javascript" | "js" => Some(LanguageRules::javascript()),
             "python" | "py" => Some(LanguageRules::python()),
+            "ruby" | "rb" => Some(LanguageRules::ruby()),
             "go" => Some(LanguageRules::go()),
             "java" => Some(LanguageRules::java()),
             "c" => Some(LanguageRules::c()),
             "cpp" | "c++" | "cxx" => Some(LanguageRules::cpp()),
             "bash" | "sh" => Some(LanguageRules::bash()),
             "qml" => Some(LanguageRules::qml()),
+            "solidity" | "sol" => Some(LanguageRules::solidity()),
+            "crystal" | "cr" => Some(LanguageRules::crystal()),
+            "haskell" | "hs" | "lhs" => Some(LanguageRules::haskell()),
             _ => None,
         }
     }
@@ -545,12 +667,16 @@ impl LanguageRulesFactory {
             "typescript".to_string(),
             "javascript".to_string(),
             "python".to_string(),
+            "ruby".to_string(),
             "go".to_string(),
             "java".to_string(),
             "c".to_string(),
             "cpp".to_string(),
             "bash".to_string(),
             "qml".to_string(),
+            "solidity".to_string(),
+            "crystal".to_string(),
+            "haskell".to_string(),
         ]
     }
 

@@ -1,3 +1,4 @@
+use crate::file_guard;
 use anyhow::{Context, Result};
 use regex::{RegexSet, RegexSetBuilder};
 use std::collections::{HashMap, HashSet};
@@ -90,71 +91,14 @@ impl RipgrepSearcher {
             println!("DEBUG: Searching file with optimized RegexSet: {file_path:?}");
         }
 
-        // Define a reasonable maximum file size (same as old implementation)
-        const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1MB
-
-        // Skip symlinks and junctions entirely to avoid stack overflow
-        use crate::path_safety;
-
-        if path_safety::is_symlink_or_junction(file_path) {
-            if self.debug_mode {
-                println!("DEBUG: Skipping symlink/junction: {file_path:?}");
-            }
-            return Err(anyhow::anyhow!("Skipping symlink/junction"));
-        }
-
-        // Use the path as-is in CI to avoid any resolution issues
-        let resolved_path = if path_safety::is_ci_environment() {
-            file_path.to_path_buf()
-        } else {
-            // Only canonicalize if not in CI and not a symlink
-            match std::fs::canonicalize(file_path) {
-                Ok(path) => path,
-                Err(_) => file_path.to_path_buf(), // Fall back to original path
-            }
-        };
-
-        // Get file metadata to check size and file type
-        let metadata = match std::fs::metadata(&resolved_path) {
-            Ok(meta) => meta,
-            Err(e) => {
-                if self.debug_mode {
-                    println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
-                }
-                return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
-            }
-        };
-
-        // Check if the file is too large
-        if metadata.len() > MAX_FILE_SIZE {
-            if self.debug_mode {
-                println!(
-                    "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
-                    resolved_path,
-                    metadata.len(),
-                    MAX_FILE_SIZE
-                );
-            }
-            return Err(anyhow::anyhow!(
-                "File too large: {} bytes (limit: {} bytes)",
-                metadata.len(),
-                MAX_FILE_SIZE
-            ));
-        }
-
-        // Read the file content with proper error handling (simple and fast)
-        let content = match std::fs::read_to_string(&resolved_path) {
+        // Read the file content with shared text-search safety checks.
+        let content = match file_guard::read_searchable_text_file(file_path) {
             Ok(content) => content,
             Err(e) => {
                 if self.debug_mode {
-                    println!(
-                        "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
-                        resolved_path,
-                        e,
-                        metadata.len()
-                    );
+                    println!("DEBUG: Skipping unreadable/search-denied file {file_path:?}: {e:?}");
                 }
-                return Err(anyhow::anyhow!("Failed to read file: {}", e));
+                return Err(e);
             }
         };
 

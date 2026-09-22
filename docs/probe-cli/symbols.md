@@ -16,6 +16,12 @@ probe symbols src/main.rs src/lib.rs
 
 # Include test functions
 probe symbols src/main.rs --allow-tests
+
+# Plain-text fallback for documentation/config files
+probe symbols rsync.1 --format json
+
+# Treat a custom extension as plain text
+probe symbols notes.req --text-extension req --format json
 ```
 
 ## Basic Syntax
@@ -30,6 +36,31 @@ probe symbols <FILES> [OPTIONS]
 |--------|-------------|---------|
 | `-o, --format` | Output format: `text` or `json` | `text` |
 | `--allow-tests` | Include test functions/methods | `false` |
+| `--strict` | Disable plain-text fallback for unsupported extensions | `false` |
+| `--text-extension EXT` | Treat an extension as plain text (repeatable, with or without `.`) | - |
+
+## Plain-Text Fallback
+
+Unsupported extensions fall back to line-oriented text symbols by default. Standard documentation and config-style extensions such as `.1`, `.5`, `.txt`, `.conf`, `.tex`, `.sh`, and `.json` are treated as plain text.
+
+Plain-text entries use `kind: "text"`, an empty `name`, and the source line as `signature`:
+
+```json
+[{
+  "file": "rsync.1",
+  "symbols": [
+    {
+      "name": "",
+      "kind": "text",
+      "signature": ".TH rsync 1",
+      "line": 1,
+      "end_line": 1
+    }
+  ]
+}]
+```
+
+Use `--strict` when a caller only wants AST-backed symbols and wants unsupported extensions to be reported as warnings. Use `--text-extension EXT` to force additional suffixes into plain-text mode.
 
 ## Output Formats
 

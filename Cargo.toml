@@ -24,7 +24,6 @@ uninlined_format_args = "allow"
 ahash = "0.8.6"  # Fast, non-cryptographic hash function
 dashmap = "5.5.3"  # Thread-safe concurrent HashMap
 anyhow = "1.0"
-atty = "0.2.13"
 colored = "3.0.0"
 dirs = "5.0.1"
 ignore = "0.4"
@@ -40,12 +39,15 @@ tree-sitter-java = "0.23.5"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-php = "0.23.11"
 tree-sitter-swift = { version = "0.7.0" }
-tree-sitter-c-sharp = { version = "0.23.1" }
+tree-sitter-c-sharp = { version = "=0.23.1" }
 tree-sitter-html = "0.23.2"
 tree-sitter-md = "0.3.2"
 tree-sitter-yaml = "0.6.1"
 tree-sitter-bash = "0.23.3"
 tree-sitter-qmljs = "0.3.1"
+tree-sitter-solidity = "=1.2.10"
+tree-sitter-crystal = { git = "https://github.com/crystal-lang-tools/tree-sitter-crystal", rev = "f71f4ca62ac0" }
+tree-sitter-haskell = "0.23.1"
 ast-grep-core = "0.36.1"
 ast-grep-language = "0.36.1"
 clap = { version = "4.3", features = ["derive"] }

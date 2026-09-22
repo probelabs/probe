@@ -29,6 +29,9 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "cs" => Some("csharp"),
         "sh" | "bash" => Some("bash"),
         "qml" => Some("qml"),
+        "sol" => Some("solidity"),
+        "cr" => Some("crystal"),
+        "hs" | "lhs" => Some("haskell"),
         _ => None,
     }
 }
@@ -93,6 +96,9 @@ impl SymbolUIDGenerator {
         // Python
         rules.insert("python".to_string(), LanguageRules::python());
 
+        // Ruby
+        rules.insert("ruby".to_string(), LanguageRules::ruby());
+
         // Go
         rules.insert("go".to_string(), LanguageRules::go());
 
@@ -103,6 +109,9 @@ impl SymbolUIDGenerator {
         rules.insert("c".to_string(), LanguageRules::c());
         rules.insert("cpp".to_string(), LanguageRules::cpp());
         rules.insert("c++".to_string(), LanguageRules::cpp());
+        rules.insert("solidity".to_string(), LanguageRules::solidity());
+        rules.insert("crystal".to_string(), LanguageRules::crystal());
+        rules.insert("haskell".to_string(), LanguageRules::haskell());
 
         // Bash
         rules.insert("bash".to_string(), LanguageRules::bash());

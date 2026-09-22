@@ -107,6 +107,9 @@ Probe currently supports a wide range of programming languages, including:
 - Ruby
 - PHP
 - Swift
+- Solidity
+- Bash
+- QML
 - C#
 - Markdown
 

@@ -44,7 +44,7 @@ lazy_static::lazy_static! {
             let critical_languages = ["rs", "js", "ts", "py", "go", "java"];
 
             // Tier 2: Common languages - warm with lower priority
-            let common_languages = ["cpp", "c", "jsx", "tsx", "rb", "php", "cs"];
+            let common_languages = ["cpp", "c", "jsx", "tsx", "rb", "php", "cs", "sol", "cr", "hs"];
 
             // Tier 3: Specialized languages - warm last
             let specialized_languages = ["swift", "h", "cc", "cxx", "hpp", "hxx", "sh", "qml"];
@@ -137,7 +137,8 @@ pub fn smart_warm_parser_pool_for_directory(path: &Path) {
     let priority_order = [
         "rs", "js", "ts", "py", "go", "java", // Tier 1: Critical
         "cpp", "c", "jsx", "tsx", "rb", "php", "cs", // Tier 2: Common
-        "swift", "h", "cc", "cxx", "hpp", "hxx", "sh", "qml", // Tier 3: Specialized
+        "swift", "sol", "cr", "hs", "lhs", "h", "cc", "cxx", "hpp",
+        "hxx", "sh", "qml", // Tier 3: Specialized
     ];
 
     // Warm detected languages in priority order
@@ -184,8 +185,12 @@ pub fn smart_warm_parser_pool_for_directory(path: &Path) {
 /// # Example
 ///
 /// ```rust
-/// let parser = get_pooled_parser("rs")?;
-/// let tree = parser.parse(rust_code, None)?;
+/// use probe_code::language::{get_pooled_parser, return_pooled_parser};
+///
+/// let rust_code = "fn main() {}";
+/// let mut parser = get_pooled_parser("rs").unwrap();
+/// let tree = parser.parse(rust_code, None).unwrap();
+/// assert!(tree.root_node().is_named());
 /// return_pooled_parser("rs", parser);
 /// ```
 pub fn get_pooled_parser(extension: &str) -> Result<Parser> {

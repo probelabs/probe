@@ -50,6 +50,7 @@ import { editTool, createTool, multiEditTool } from './tools/edit.js';
 import { FileTracker } from './tools/fileTracker.js';
 import { ProbeAgent, ENGINE_ACTIVITY_TIMEOUT_DEFAULT, ENGINE_ACTIVITY_TIMEOUT_MIN, ENGINE_ACTIVITY_TIMEOUT_MAX } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
+import { spawnGovernedProcess } from './agent/processSupervisor.js';
 import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
 import { StorageAdapter, InMemoryStorageAdapter } from './agent/storage/index.js';
 import { HookManager, HOOK_TYPES } from './agent/hooks/index.js';
@@ -88,6 +89,7 @@ export {
 	SimpleTelemetry,
 	SimpleAppTracer,
 	initializeSimpleTelemetryFromOptions,
+	spawnGovernedProcess,
 	// Export tool generators directly
 	searchTool,
 	queryTool,

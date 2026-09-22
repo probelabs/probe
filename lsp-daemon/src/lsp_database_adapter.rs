@@ -822,6 +822,18 @@ impl LspDatabaseAdapter {
                     debug!("[TREE_SITTER] Using tree-sitter-cpp");
                     Some(tree_sitter_cpp::LANGUAGE.into())
                 }
+                "solidity" | "sol" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-solidity");
+                    Some(tree_sitter_solidity::LANGUAGE.into())
+                }
+                "crystal" | "cr" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-crystal");
+                    Some(tree_sitter_crystal::LANGUAGE.into())
+                }
+                "haskell" | "hs" | "lhs" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-haskell");
+                    Some(tree_sitter_haskell::LANGUAGE.into())
+                }
                 "php" => {
                     debug!("[TREE_SITTER] Using tree-sitter-php");
                     Some(tree_sitter_php::LANGUAGE_PHP.into())
@@ -833,6 +845,10 @@ impl LspDatabaseAdapter {
                 "qml" => {
                     debug!("[TREE_SITTER] Using tree-sitter-qmljs");
                     Some(tree_sitter_qmljs::LANGUAGE.into())
+                }
+                "ruby" | "rb" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-ruby");
+                    Some(tree_sitter_ruby::LANGUAGE.into())
                 }
                 _ => {
                     debug!(
@@ -963,6 +979,17 @@ impl LspDatabaseAdapter {
             // QML symbols (tree-sitter-qmljs)
             "ui_object_definition" | "ui_object_definition_binding" | "ui_inline_component"
             | "ui_property" | "ui_binding" | "ui_signal" => true,
+            // Crystal symbols
+            "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
+            | "method_def" | "abstract_method_def" | "macro_def" | "fun_def" | "alias"
+            | "annotation_def" | "type_def" => true,
+            // Haskell symbols
+            "function" | "bind" | "signature" | "default_signature" | "data_type" | "newtype"
+            | "class" | "instance" | "type_synomym" | "type_family" | "type_instance"
+            | "data_family" | "data_instance" | "kind_signature" | "foreign_import"
+            | "foreign_export" | "pattern_synonym" => true,
+            // Ruby symbols
+            "module" | "method" | "singleton_method" => true,
             _ => false,
         }
     }
@@ -1186,10 +1213,16 @@ impl LspDatabaseAdapter {
                 | "type_identifier"
                 | "field_identifier"
                 | "property_identifier"
+                | "constant"
+                | "name"
+                | "variable"
+                | "constructor"
+                | "module_id"
+                | "field_name"
+                | "prefix_id"
                 // Bash grammar uses `word` for function names and `variable_name` for assignments
                 | "word"
                 | "variable_name"
-                | "constant"
         )
     }
 
@@ -1208,6 +1241,7 @@ impl LspDatabaseAdapter {
                 | "interface"
                 | "impl"
                 | "mod"
+                | "module"
                 | "namespace"
                 | "package"
                 | "import"
@@ -1236,6 +1270,11 @@ impl LspDatabaseAdapter {
                 | "override"
                 | "virtual"
                 | "abstract"
+                | "data"
+                | "newtype"
+                | "type"
+                | "where"
+                | "instance"
         ) || text.is_empty()
     }
 
@@ -1246,16 +1285,40 @@ impl LspDatabaseAdapter {
             | "function_declaration"
             | "function_definition"
             | "func_declaration" => SymbolKind::Function,
-            "method_definition" | "method_declaration" => SymbolKind::Method,
+            "method"
+            | "singleton_method"
+            | "method_definition"
+            | "method_declaration"
+            | "method_def"
+            | "abstract_method_def" => SymbolKind::Method,
+            "function" | "bind" | "signature" | "default_signature" | "foreign_import"
+            | "foreign_export" => SymbolKind::Function,
+            "macro_def" => SymbolKind::Macro,
+            "fun_def" => SymbolKind::Function,
             "constructor_declaration" => SymbolKind::Constructor,
-            "class_declaration" | "class_definition" => SymbolKind::Class,
-            "struct_item" | "struct_specifier" => SymbolKind::Struct,
-            "enum_item" | "enum_specifier" | "enum_declaration" => SymbolKind::Enum,
+            "class_declaration" | "class_definition" | "class_def" | "class" => SymbolKind::Class,
+            "struct_item" | "struct_specifier" | "struct_def" => SymbolKind::Struct,
+            "enum_item" | "enum_specifier" | "enum_declaration" | "enum_def" => SymbolKind::Enum,
             "trait_item" => SymbolKind::Trait,
-            "interface_declaration" => SymbolKind::Interface,
+            "interface_declaration" | "lib_def" => SymbolKind::Interface,
             "impl_item" => SymbolKind::Impl,
-            "mod_item" | "namespace" => SymbolKind::Module,
-            "type_declaration" | "type_alias_declaration" => SymbolKind::Type,
+            "mod_item" | "namespace" | "module" | "module_def" => SymbolKind::Module,
+            "type_declaration"
+            | "type_alias_declaration"
+            | "alias"
+            | "annotation_def"
+            | "type_def"
+            | "union_def"
+            | "data_type"
+            | "newtype"
+            | "type_synomym"
+            | "type_family"
+            | "type_instance"
+            | "data_family"
+            | "data_instance"
+            | "kind_signature" => SymbolKind::Type,
+            "instance" => SymbolKind::TraitImpl,
+            "pattern_synonym" => SymbolKind::Constant,
             "variable_declarator" | "variable_declaration" => SymbolKind::Variable,
             "field_declaration" => SymbolKind::Field,
             // Bash
@@ -2330,6 +2393,8 @@ impl LspDatabaseAdapter {
             "c" => "c",
             "bash" => "sh",
             "qml" => "qml",
+            "crystal" => "cr",
+            "haskell" => "hs",
             _ => language, // Fallback to original if no mapping
         }
     }
@@ -2430,9 +2495,9 @@ impl LspDatabaseAdapter {
     fn get_language_separator(extension: &str) -> &str {
         match extension {
             "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sh" | "bash" | "qml" => {
-                "."
-            }
+            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs"
+            | "sh" | "bash" | "qml" => ".",
+            "cr" => "::",
             "php" => "\\",
             _ => "::", // Default to Rust-style for unknown languages
         }
@@ -2453,6 +2518,27 @@ impl LspDatabaseAdapter {
             "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
             "sh" | "bash" => matches!(kind, "function_definition"),
             "qml" => matches!(kind, "function_declaration" | "method_definition"),
+            "sol" => matches!(
+                kind,
+                "function_definition"
+                    | "constructor_definition"
+                    | "modifier_definition"
+                    | "fallback_receive_definition"
+            ),
+            "cr" => matches!(
+                kind,
+                "method_def" | "abstract_method_def" | "macro_def" | "fun_def"
+            ),
+            "ruby" | "rb" => matches!(kind, "method" | "singleton_method"),
+            "hs" | "lhs" => matches!(
+                kind,
+                "function"
+                    | "bind"
+                    | "signature"
+                    | "default_signature"
+                    | "foreign_import"
+                    | "foreign_export"
+            ),
             _ => kind.contains("function") || kind.contains("method"),
         }
     }
@@ -2480,6 +2566,29 @@ impl LspDatabaseAdapter {
             "sh" | "bash" => false,
             // QML ui_object_definition is the enclosing component scope
             "qml" => matches!(kind, "ui_object_definition" | "ui_inline_component"),
+            "sol" => matches!(
+                kind,
+                "contract_declaration"
+                    | "interface_declaration"
+                    | "library_declaration"
+                    | "struct_declaration"
+                    | "enum_declaration"
+            ),
+            "cr" => matches!(
+                kind,
+                "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
+            ),
+            "ruby" | "rb" => matches!(kind, "class" | "module"),
+            "hs" | "lhs" => matches!(
+                kind,
+                "class"
+                    | "instance"
+                    | "data_type"
+                    | "newtype"
+                    | "type_synomym"
+                    | "type_family"
+                    | "data_family"
+            ),
             _ => {
                 kind.contains("class")
                     || kind.contains("struct")
@@ -2843,6 +2952,63 @@ Item {
         assert_eq!(symbol.kind, SymbolKind::Function);
     }
 
+    #[test]
+    fn test_find_symbol_at_position_uses_crystal_tree_sitter() {
+        let adapter = create_test_adapter();
+        let crystal_code = r#"
+module Demo
+  class User
+    def active? : Bool
+      true
+    end
+  end
+end
+"#;
+        let file_path = PathBuf::from("sample.cr");
+
+        let class_symbol = adapter
+            .find_symbol_at_position(crystal_code, &file_path, 2, 10, "crystal")
+            .expect("Crystal tree-sitter symbol lookup should parse")
+            .expect("class position should resolve to a Crystal symbol");
+        assert_eq!(class_symbol.name, "User");
+        assert_eq!(class_symbol.kind, SymbolKind::Class);
+
+        let method_symbol = adapter
+            .find_symbol_at_position(crystal_code, &file_path, 4, 6, "cr")
+            .expect("Crystal alias should select the tree-sitter parser")
+            .expect("method body position should resolve to enclosing method");
+        assert_eq!(method_symbol.name, "active?");
+        assert_eq!(method_symbol.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn test_find_symbol_at_position_uses_haskell_tree_sitter() {
+        let adapter = create_test_adapter();
+        let haskell_code = r#"
+module Demo.Sample where
+
+data User = User { userName :: String }
+
+active :: User -> Bool
+active user = True
+"#;
+        let file_path = PathBuf::from("Sample.hs");
+
+        let type_symbol = adapter
+            .find_symbol_at_position(haskell_code, &file_path, 3, 6, "haskell")
+            .expect("Haskell tree-sitter symbol lookup should parse")
+            .expect("data type position should resolve to a Haskell symbol");
+        assert_eq!(type_symbol.name, "User");
+        assert_eq!(type_symbol.kind, SymbolKind::Type);
+
+        let function_symbol = adapter
+            .find_symbol_at_position(haskell_code, &file_path, 6, 5, "hs")
+            .expect("Haskell alias should select the tree-sitter parser")
+            .expect("function body position should resolve to enclosing function");
+        assert_eq!(function_symbol.name, "active");
+        assert_eq!(function_symbol.kind, SymbolKind::Function);
+    }
+
     #[tokio::test]
     async fn test_resolve_symbol_at_location_rust_function() {
         let adapter = LspDatabaseAdapter::new();
@@ -3175,7 +3341,7 @@ pub fn test_function() -> i32 {
         );
         assert_eq!(
             adapter.node_kind_to_symbol_kind("impl_item"),
-            SymbolKind::Class
+            SymbolKind::Impl
         );
 
         // Test Python mappings
@@ -3205,6 +3371,21 @@ pub fn test_function() -> i32 {
             adapter.node_kind_to_symbol_kind("interface_declaration"),
             SymbolKind::Interface
         );
+
+        // Test Ruby mappings
+        assert_eq!(
+            adapter.node_kind_to_symbol_kind("method"),
+            SymbolKind::Method
+        );
+        assert_eq!(
+            adapter.node_kind_to_symbol_kind("singleton_method"),
+            SymbolKind::Method
+        );
+        assert_eq!(
+            adapter.node_kind_to_symbol_kind("module"),
+            SymbolKind::Module
+        );
+        assert_eq!(adapter.node_kind_to_symbol_kind("class"), SymbolKind::Class);
 
         // Test fallback
         assert_eq!(

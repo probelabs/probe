@@ -484,7 +484,10 @@ export async function delegate({
 			disableJsonValidation: true,     // Simpler responses
 			maxIterations: remainingIterations,
 			debug,
-			tracer,
+			tracer: tracer && typeof tracer.createChildTracer === 'function'
+				? tracer.createChildTracer(sessionId, { agentKind: 'delegate' })
+				: (tracer && debug && console.warn('[delegate] createChildTracer not available, using parent tracer — events will not be scoped to subagent'), tracer),
+			delegationTask: task,
 			path,       // Workspace root (from delegateTool)
 			allowedFolders, // Inherit allowed folders to keep architecture context root consistent
 			cwd: path,  // Explicitly set cwd to workspace root to prevent path doubling

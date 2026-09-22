@@ -273,6 +273,54 @@ describe('MCP Tool Native Integration', () => {
 
     });
 
+    test('should remove MCP required fields that are not defined in properties (issue #569)', () => {
+      const jiraSchema = {
+        type: 'object',
+        properties: {
+          jql: { type: 'string', description: 'Jira query' },
+          options: {
+            type: 'object',
+            properties: {
+              limit: { type: 'number' },
+              includeDone: { type: 'boolean' }
+            },
+            required: ['limit', 'missingNested']
+          },
+          filters: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                field: { type: 'string' },
+                value: { type: 'string' }
+              },
+              required: ['field', 'missingArrayItem']
+            }
+          }
+        },
+        required: ['jql', 'cloudId', 'options']
+      };
+
+      mockMcpBridge.getToolNames = jest.fn(() => ['jira_search']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        jira_search: {
+          description: 'Search Jira issues',
+          inputSchema: jiraSchema,
+          execute: jest.fn(async () => 'results')
+        }
+      }));
+
+      const tools = agent._buildNativeTools({});
+
+      expect(tools).toHaveProperty('jira_search');
+      const sanitizedSchema = tools.jira_search.inputSchema.jsonSchema;
+      expect(sanitizedSchema.required).toEqual(['jql', 'options']);
+      expect(sanitizedSchema.properties.options.required).toEqual(['limit']);
+      expect(sanitizedSchema.properties.filters.items.required).toEqual(['field']);
+      expect(jiraSchema.required).toEqual(['jql', 'cloudId', 'options']);
+      expect(jiraSchema.properties.options.required).toEqual(['limit', 'missingNested']);
+    });
+
     test('should handle MCP tools with empty inputSchema', () => {
       mockMcpBridge.getToolNames = jest.fn(() => ['simple_tool']);
       mockMcpBridge.getVercelTools = jest.fn(() => ({

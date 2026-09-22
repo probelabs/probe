@@ -137,6 +137,10 @@ impl LanguageImpl for PythonLanguage {
                     // Find the = and only show the left side for constants/variables
                     if let Some(eq_pos) = assignment_str.find('=') {
                         let left_side = assignment_str[..eq_pos].trim();
+                        let right_side = assignment_str[eq_pos + 1..].trim();
+                        if right_side.contains("lambda") || right_side.contains(" for ") {
+                            return None;
+                        }
                         // Only show if it looks like a constant (uppercase) or important variable
                         if left_side.chars().any(|c| c.is_uppercase()) || left_side.contains('_') {
                             Some(format!("{} = ...", left_side))
@@ -183,5 +187,16 @@ impl LanguageImpl for PythonLanguage {
             }
             _ => None,
         }
+    }
+
+    fn allow_symbol_signature_fallback(&self, node: &Node) -> bool {
+        node.kind() != "assignment"
+    }
+
+    fn is_symbol_node(&self, node: &Node) -> bool {
+        matches!(
+            node.kind(),
+            "function_definition" | "class_definition" | "decorated_definition" | "assignment"
+        )
     }
 }

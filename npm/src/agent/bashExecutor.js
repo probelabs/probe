@@ -3,10 +3,10 @@
  * @module agent/bashExecutor
  */
 
-import { spawn } from 'child_process';
-import { resolve, join } from 'path';
+import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { parseCommandForExecution, isComplexCommand } from './bashCommandUtils.js';
+import { spawnGovernedProcess } from './processSupervisor.js';
 
 // ─── Interactive Command Detection ─────────────────────────────────────────
 
@@ -261,7 +261,7 @@ export async function executeBashCommand(command, options = {}) {
     console.log(`[BashExecutor] Timeout: ${timeout}ms`);
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     // Create environment with non-interactive safety defaults.
     // These prevent commands from opening editors or TTY prompts
     // when stdin is not available (which would cause hangs).
@@ -276,14 +276,13 @@ export async function executeBashCommand(command, options = {}) {
     // Check if this is a complex command (contains pipes, operators, etc.)
     const isComplex = isComplexCommand(command);
 
-    let cmd, cmdArgs, useShell;
+    let cmd, cmdArgs;
 
     if (isComplex) {
       // For complex commands, use sh -c to execute through shell
       // This is only reached if the permission checker allowed the complex command
       cmd = 'sh';
       cmdArgs = ['-c', command];
-      useShell = false; // We explicitly use sh -c, not spawn's shell option
       if (debug) {
         console.log(`[BashExecutor] Complex command - using sh -c`);
       }
@@ -304,7 +303,6 @@ export async function executeBashCommand(command, options = {}) {
         return;
       }
       [cmd, ...cmdArgs] = args;
-      useShell = false;
     }
 
     // Spawn the process in a new session (detached: true → setsid on Linux).
@@ -312,83 +310,42 @@ export async function executeBashCommand(command, options = {}) {
     // /dev/tty unavailable. Any program that tries to open an interactive
     // editor or TTY prompt (e.g. vim from git rebase) will get ENXIO and
     // fail immediately instead of hanging forever.
-    const child = spawn(cmd, cmdArgs, {
+    const governed = spawnGovernedProcess({
+      command: cmd,
+      args: cmdArgs,
       cwd,
       env: processEnv,
-      stdio: ['ignore', 'pipe', 'pipe'], // stdin ignored, capture stdout/stderr
-      shell: useShell, // false for security
-      detached: true, // new session — no controlling terminal
-      windowsHide: true
+      executionTimeoutMs: timeout,
+      terminationGraceMs: 5000,
+      cleanupTimeoutMs: 10000,
+      stdoutByteCap: maxBuffer,
+      stderrByteCap: maxBuffer,
+      signalScope: 'process-group'
     });
-
-    let stdout = '';
-    let stderr = '';
-    let killed = false;
-    let timeoutHandle;
-
-    // Helper: kill the entire process group (negative PID) so that
-    // sub-processes spawned by the command (e.g. an editor) are also killed.
-    // Falls back to killing just the child if process.kill fails.
-    const killProcessGroup = (signal) => {
-      try {
-        if (child.pid) process.kill(-child.pid, signal);
-      } catch {
-        try { child.kill(signal); } catch { /* already dead */ }
-      }
-    };
-
-    // Set timeout
-    if (timeout > 0) {
-      timeoutHandle = setTimeout(() => {
-        if (!killed) {
-          killed = true;
-          killProcessGroup('SIGTERM');
-
-          // Force kill after 5 seconds if still running
-          setTimeout(() => {
-            if (child.exitCode === null) {
-              killProcessGroup('SIGKILL');
-            }
-          }, 5000);
-        }
-      }, timeout);
-    }
-
-    // Handle stdout
-    child.stdout.on('data', (data) => {
-      const chunk = data.toString();
-      if (stdout.length + chunk.length <= maxBuffer) {
-        stdout += chunk;
-      } else {
-        // Buffer overflow
-        if (!killed) {
-          killed = true;
-          killProcessGroup('SIGTERM');
-        }
-      }
-    });
-
-    // Handle stderr
-    child.stderr.on('data', (data) => {
-      const chunk = data.toString();
-      if (stderr.length + chunk.length <= maxBuffer) {
-        stderr += chunk;
-      } else {
-        // Buffer overflow
-        if (!killed) {
-          killed = true;
-          killProcessGroup('SIGTERM');
-        }
-      }
-    });
-
-    // Handle process exit
-    child.on('close', (code, signal) => {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
-
+    governed.result.then(receipt => {
       const duration = Date.now() - startTime;
+      if (receipt.classification === 'spawn_error') {
+        if (debug) {
+          console.log(`[BashExecutor] Spawn error: ${receipt.error ?? 'spawn failed'}`);
+        }
+        resolve({
+          success: false,
+          error: `Failed to execute command: ${receipt.error ?? 'spawn failed'}`,
+          stdout: '',
+          stderr: '',
+          exitCode: 1,
+          command,
+          workingDirectory: cwd,
+          duration
+        });
+        return;
+      }
+
+      const stdout = receipt.stdout;
+      const stderr = receipt.stderr;
+      const code = receipt.exitCode;
+      const signal = receipt.signal;
+      const killed = ['execution_timeout', 'output_overflow', 'terminated', 'aborted', 'cleanup_timeout'].includes(receipt.classification);
       
       if (debug) {
         console.log(`[BashExecutor] Command completed - Code: ${code}, Signal: ${signal}, Duration: ${duration}ms`);
@@ -400,7 +357,7 @@ export async function executeBashCommand(command, options = {}) {
 
       if (killed) {
         success = false;
-        if (stdout.length + stderr.length > maxBuffer) {
+        if (receipt.classification === 'output_overflow') {
           error = `Command output exceeded maximum buffer size (${maxBuffer} bytes)`;
         } else {
           error = `Command timed out after ${timeout}ms`;
@@ -421,28 +378,6 @@ export async function executeBashCommand(command, options = {}) {
         workingDirectory: cwd,
         duration,
         killed
-      });
-    });
-
-    // Handle spawn errors
-    child.on('error', (error) => {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
-
-      if (debug) {
-        console.log(`[BashExecutor] Spawn error:`, error);
-      }
-
-      resolve({
-        success: false,
-        error: `Failed to execute command: ${error.message}`,
-        stdout: '',
-        stderr: '',
-        exitCode: 1,
-        command,
-        workingDirectory: cwd,
-        duration: Date.now() - startTime
       });
     });
   });

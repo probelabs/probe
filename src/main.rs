@@ -192,7 +192,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
 
     let use_frequency = params.frequency_search;
 
-    println!("{} {}", "Pattern:".bold().green(), params.pattern);
+    if params.format != "json" && params.format != "xml" {
+        println!("{} {}", "Pattern:".bold().green(), params.pattern);
+    }
     // Normalize the search root early. Some downstream code paths are stricter about absolute paths.
     let raw_root = params.paths.first().unwrap();
 
@@ -228,7 +230,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
     } else {
         raw_root.clone()
     };
-    println!("{} {}", "Path:".bold().green(), canonical_root.display());
+    if params.format != "json" && params.format != "xml" {
+        println!("{} {}", "Path:".bold().green(), canonical_root.display());
+    }
 
     // Show advanced options if they differ from defaults
     let mut advanced_options = Vec::<String>::new();
@@ -359,12 +363,25 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 // Genuinely no results found - show helpful tips
                 println!("{}", "No results found.".yellow().bold());
                 println!();
-                println!("💡 Tips to improve your search:");
-                println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
-                println!("  - Use broader terms without AND operators");
-                println!("  - Check spelling of function/class names");
-                println!("  - Remove file type filters to search all files");
-                println!("  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup");
+                if params.exact && params.pattern.trim().contains(char::is_whitespace) {
+                    // --exact turns a multi-word query into a single literal phrase (no
+                    // tokenization), so conceptual/multi-word queries almost always miss.
+                    // Call this out specifically instead of the generic tips below.
+                    println!(
+                        "💡 {} --exact matched your whole query as one literal phrase (\"{}\"), with no tokenization or stemming",
+                        "Hint:".dimmed(),
+                        params.pattern
+                    );
+                    println!("  - For multi-word/conceptual searches, drop --exact so each word is tokenized and matched individually");
+                    println!("  - Keep --exact for precise, single-term symbol lookups (e.g. an exact function or variable name)");
+                } else {
+                    println!("💡 Tips to improve your search:");
+                    println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
+                    println!("  - Use broader terms without AND operators");
+                    println!("  - Check spelling of function/class names");
+                    println!("  - Remove file type filters to search all files");
+                    println!("  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup");
+                }
             }
             if params.verbose {
                 println!();
@@ -838,7 +855,17 @@ async fn main() -> Result<()> {
             files,
             format,
             allow_tests,
-        }) => probe_code::extract::symbols::handle_symbols(files, &format, allow_tests)?,
+            strict,
+            text_extensions,
+        }) => probe_code::extract::symbols::handle_symbols(
+            files,
+            &format,
+            probe_code::extract::symbols::SymbolOptions {
+                allow_tests,
+                strict,
+                text_extensions,
+            },
+        )?,
         Some(Commands::Query {
             pattern,
             path,
@@ -846,6 +873,9 @@ async fn main() -> Result<()> {
             ignore,
             allow_tests,
             max_results,
+            with_context,
+            strict,
+            text_extensions,
             format,
             no_gitignore,
         }) => probe_code::query::handle_query(
@@ -863,6 +893,9 @@ async fn main() -> Result<()> {
                     "rb" => "ruby",
                     "cs" => "csharp",
                     "sh" => "bash",
+                    "sol" => "solidity",
+                    "cr" => "crystal",
+                    "hs" | "lhs" => "haskell",
                     _ => lang, // Return the original language if no alias is found
                 }
             }),
@@ -871,6 +904,9 @@ async fn main() -> Result<()> {
             max_results,
             &format,
             no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            with_context,
+            strict,
+            text_extensions,
         )?,
         Some(Commands::Benchmark {
             bench,

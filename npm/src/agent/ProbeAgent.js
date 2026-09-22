@@ -1,9 +1,5 @@
 // Core ProbeAgent class adapted from examples/chat/probeChat.js
 
-// Load .env file if present (silent fail if not found)
-import dotenv from 'dotenv';
-dotenv.config();
-
 // ============================================================================
 // Timeout Configuration Constants
 // ============================================================================
@@ -29,7 +25,7 @@ export const ENGINE_ACTIVITY_TIMEOUT_MAX = 600000;
 
 import { createProviderInstance, DEFAULT_MODELS } from '../utils/provider.js';
 import { streamText, generateText, tool, stepCountIs, jsonSchema, Output } from 'ai';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { readFile, stat, readdir } from 'fs/promises';
@@ -70,7 +66,7 @@ import {
   clearToolExecutionData
 } from './probeTool.js';
 import { createMockProvider } from './mockProvider.js';
-import { listFilesByLevel } from '../index.js';
+import { listFilesByLevel } from '../utils/file-lister.js';
 import {
   cleanSchemaResponse,
   isJsonSchema,
@@ -106,6 +102,69 @@ import {
   createTaskCompletionBlockedMessage
 } from './tasks/index.js';
 import { z } from 'zod';
+import { validateGovernedCodexProfile } from './engines/governed-codex-profile.js';
+import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './engines/governed-answer-failure.js';
+
+const GOVERNED_RESULT_IDENTITY = 'probe.governed-result-identity/v1';
+const GOVERNED_RESULT_DOMAIN = 'probe.governed-result-identity/data/v1';
+
+function normalizeGovernedJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('answerGoverned validated result is not canonical JSON');
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeGovernedJson);
+  if (typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)) {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, normalizeGovernedJson(child)]));
+  }
+  throw new TypeError('answerGoverned validated result is not canonical JSON');
+}
+
+function freezeGovernedTree(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeGovernedTree(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function identifyGovernedResult(value) {
+  const data = freezeGovernedTree(normalizeGovernedJson(value));
+  const canonical = Buffer.from(JSON.stringify(data), 'utf8');
+  const byteLength = Buffer.alloc(8);
+  byteLength.writeBigUInt64BE(BigInt(canonical.length));
+  const resultDigest = `sha256:${createHash('sha256').update(GOVERNED_RESULT_DOMAIN, 'utf8').update(Buffer.from([0])).update(byteLength).update(canonical).digest('hex')}`;
+  const resultIdentity = Object.freeze({ version: GOVERNED_RESULT_IDENTITY, source: 'probe-host-schema-valid-json', resultDigest, canonicalBytes: canonical.length });
+  return { data, resultIdentity };
+}
+
+function governedSchemaResultValidationFailure(validation) {
+  const subreason = validation?.error === 'Invalid schema provided' ||
+    validation?.error === 'Schema compilation failed' ? 'schema_definition'
+    : validation?.error === 'Schema validation failed' ? 'schema_mismatch'
+      : 'response_json';
+  const schemaResultValidationKeyword = subreason === 'schema_mismatch'
+    ? classifyGovernedSchemaResultValidationKeyword(validation) : null;
+  return governedAnswerFailure('schema_result_validation', null, null, null, null, subreason,
+    schemaResultValidationKeyword);
+}
+
+const GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS = new Set([
+  'required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems',
+]);
+
+function classifyGovernedSchemaResultValidationKeyword(validation) {
+  const errors = validation?.schemaErrors;
+  if (!Array.isArray(errors) || errors.length === 0) return 'unknown';
+  const recognized = new Set();
+  for (const error of errors) {
+    const keyword = error?.keyword;
+    if (!GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS.has(keyword)) return 'unknown';
+    recognized.add(keyword);
+  }
+  return recognized.size === 1 ? [...recognized][0] : 'multiple';
+}
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -144,6 +203,77 @@ export function debugLogToolResults(toolResults) {
     const argsStr = tr.args != null ? JSON.stringify(tr.args) : '<no args>';
     const resultStr = tr.result != null ? (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)) : '<no result>';
     console.log(`[DEBUG]   tool: ${tr.toolName} | args: ${debugTruncate(argsStr)} | result: ${debugTruncate(resultStr)}`);
+  }
+}
+
+function isPlainJsonSchemaObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && !value._def;
+}
+
+function sanitizeRequiredFieldsInJsonSchema(schema) {
+  if (!isPlainJsonSchemaObject(schema)) {
+    return;
+  }
+
+  if (Array.isArray(schema.required) && isPlainJsonSchemaObject(schema.properties)) {
+    const propertyNames = new Set(Object.keys(schema.properties));
+    const filteredRequired = schema.required.filter((name) => propertyNames.has(name));
+    if (filteredRequired.length > 0) {
+      schema.required = filteredRequired;
+    } else {
+      delete schema.required;
+    }
+  }
+
+  const visitSchemaMap = (schemaMap) => {
+    if (!isPlainJsonSchemaObject(schemaMap)) return;
+    for (const childSchema of Object.values(schemaMap)) {
+      sanitizeRequiredFieldsInJsonSchema(childSchema);
+    }
+  };
+
+  visitSchemaMap(schema.properties);
+  visitSchemaMap(schema.patternProperties);
+  visitSchemaMap(schema.definitions);
+  visitSchemaMap(schema.$defs);
+  visitSchemaMap(schema.dependentSchemas);
+
+  if (isPlainJsonSchemaObject(schema.items)) {
+    sanitizeRequiredFieldsInJsonSchema(schema.items);
+  } else if (Array.isArray(schema.items)) {
+    for (const itemSchema of schema.items) {
+      sanitizeRequiredFieldsInJsonSchema(itemSchema);
+    }
+  }
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    if (Array.isArray(schema[keyword])) {
+      for (const childSchema of schema[keyword]) {
+        sanitizeRequiredFieldsInJsonSchema(childSchema);
+      }
+    }
+  }
+
+  if (isPlainJsonSchemaObject(schema.not)) {
+    sanitizeRequiredFieldsInJsonSchema(schema.not);
+  }
+
+  if (isPlainJsonSchemaObject(schema.additionalProperties)) {
+    sanitizeRequiredFieldsInJsonSchema(schema.additionalProperties);
+  }
+}
+
+export function sanitizeToolInputSchema(schema) {
+  if (!isPlainJsonSchemaObject(schema)) {
+    return schema;
+  }
+
+  try {
+    const clonedSchema = JSON.parse(JSON.stringify(schema));
+    sanitizeRequiredFieldsInJsonSchema(clonedSchema);
+    return clonedSchema;
+  } catch {
+    return schema;
   }
 }
 
@@ -216,6 +346,7 @@ export class ProbeAgent {
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this._abortController = new AbortController();
+    this._codexNativeSystemPromptPromise = null;
     this._activeSubagents = new Map(); // sessionId → subagent ProbeAgent instance
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
@@ -250,6 +381,13 @@ export class ProbeAgent {
     // Native thinking/reasoning effort for LLM providers
     // Accepted values: 'off' (default), 'low', 'medium', 'high', or a number (budget tokens)
     this.thinkingEffort = options.thinkingEffort || null;
+
+    if (options.governedCodexProfile !== undefined) {
+      if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex'); const profile = validateGovernedCodexProfile(options.governedCodexProfile);
+      const probeTools = profile.probeTools ?? profile.probeMcpTools;
+      if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== probeTools.length || options.allowedTools.some((tool, index) => tool !== probeTools[index])) throw new TypeError('allowedTools must exactly match governedCodexProfile Probe MCP tools');
+      this.governedCodexProfile = profile;
+    }
 
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
@@ -350,6 +488,7 @@ export class ProbeAgent {
     // Task management configuration
     this.enableTasks = !!options.enableTasks;
     this.taskManager = null; // Initialized per-request in answer()
+    this.delegationTask = options.delegationTask || null; // Task description when this is a subagent
 
     // Per-instance delegation manager for concurrent delegation limits
     // Each ProbeAgent instance has its own limits, not shared globally
@@ -1382,29 +1521,44 @@ export class ProbeAgent {
   }
 
   /**
+   * Create a RetryManager from the agent's retry configuration.
+   * @param {Object} [overrides={}] - Retry option overrides
+   * @returns {RetryManager}
+   * @private
+   */
+  _createRetryManager(overrides = {}) {
+    return new RetryManager({
+      maxRetries: overrides.maxRetries ?? this.retryConfig.maxRetries ?? 3,
+      initialDelay: overrides.initialDelay ?? this.retryConfig.initialDelay ?? 1000,
+      maxDelay: overrides.maxDelay ?? this.retryConfig.maxDelay ?? 30000,
+      backoffFactor: overrides.backoffFactor ?? this.retryConfig.backoffFactor ?? 2,
+      retryableErrors: overrides.retryableErrors ?? this.retryConfig.retryableErrors,
+      jitter: overrides.jitter ?? this.retryConfig.jitter,
+      debug: overrides.debug ?? this.debug
+    });
+  }
+
+  /**
    * Execute streamText with Vercel AI SDK using retry/fallback logic
    * @param {Object} options - streamText options
    * @param {AbortController} controller - Abort controller for the operation
+   * @param {Function} [consumeResult] - Optional callback to consume the stream result inside the same retry budget
    * @returns {Promise<Object>} - Stream result
    * @private
    */
-  async _executeWithVercelProvider(options, controller) {
+  async _executeWithVercelProvider(options, controller, consumeResult) {
     // Initialize retry manager if not already created
     if (!this.retryManager) {
-      this.retryManager = new RetryManager({
-        maxRetries: this.retryConfig.maxRetries ?? 3,
-        initialDelay: this.retryConfig.initialDelay ?? 1000,
-        maxDelay: this.retryConfig.maxDelay ?? 30000,
-        backoffFactor: this.retryConfig.backoffFactor ?? 2,
-        retryableErrors: this.retryConfig.retryableErrors,
-        debug: this.debug
-      });
+      this.retryManager = this._createRetryManager();
     }
 
     // If no fallback manager, just use retry with current provider
     if (!this.fallbackManager) {
       return await this.retryManager.executeWithRetry(
-        () => streamText({ ...options, abortSignal: controller.signal }),
+        async () => {
+          const result = streamText({ ...options, abortSignal: controller.signal });
+          return consumeResult ? await consumeResult(result) : result;
+        },
         {
           provider: this.apiType,
           model: this.model,
@@ -1438,17 +1592,15 @@ export class ProbeAgent {
           }
         }
 
-        const providerRetryManager = new RetryManager({
-          maxRetries: config.maxRetries ?? this.retryConfig.maxRetries ?? 3,
-          initialDelay: this.retryConfig.initialDelay ?? 1000,
-          maxDelay: this.retryConfig.maxDelay ?? 30000,
-          backoffFactor: this.retryConfig.backoffFactor ?? 2,
-          retryableErrors: this.retryConfig.retryableErrors,
-          debug: this.debug
+        const providerRetryManager = this._createRetryManager({
+          maxRetries: config.maxRetries ?? this.retryConfig.maxRetries
         });
 
         return await providerRetryManager.executeWithRetry(
-          () => streamText(fallbackOptions),
+          async () => {
+            const result = streamText(fallbackOptions);
+            return consumeResult ? await consumeResult(result) : result;
+          },
           {
             provider: config.provider,
             model: model,
@@ -1599,10 +1751,11 @@ export class ProbeAgent {
   /**
    * Execute streamText with retry and fallback support
    * @param {Object} options - streamText options
-   * @returns {Promise<Object>} - streamText result
+   * @param {Function} [consumeResult] - Optional callback to consume the result inside the same retry attempt
+   * @returns {Promise<Object>} - streamText result or consumer result
    * @private
    */
-  async streamTextWithRetryAndFallback(options) {
+  async streamTextWithRetryAndFallback(options, consumeResult) {
     // Wrap the model with per-call concurrency gating if limiter is configured.
     // This acquires/releases the slot around each individual LLM API call (doStream/doGenerate)
     // instead of holding it for the entire multi-step agent session.
@@ -1655,6 +1808,7 @@ export class ProbeAgent {
       const useCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
 
       let result;
+      let usedVercelProvider = false;
       if (useClaudeCode || useCodex) {
         try {
           result = await this._tryEngineStreamPath(options, controller, timeoutState);
@@ -1665,6 +1819,7 @@ export class ProbeAgent {
             result = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, this.debug);
           }
         } catch (error) {
+          if (this.governedCodexProfile) throw error;
           if (this.debug) {
             const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
             console.log(`[DEBUG] Failed to use ${engineType} engine, falling back to Vercel:`, error.message);
@@ -1675,7 +1830,12 @@ export class ProbeAgent {
 
       if (!result) {
         // Use Vercel AI SDK with retry/fallback
-        result = await this._executeWithVercelProvider(options, controller);
+        usedVercelProvider = true;
+        result = await this._executeWithVercelProvider(options, controller, consumeResult);
+      }
+
+      if (!usedVercelProvider && result && consumeResult) {
+        return await consumeResult(result);
       }
 
       return result;
@@ -1887,7 +2047,8 @@ export class ProbeAgent {
     const wrapTool = (toolName, schema, description, executeFn) => {
       // Auto-wrap plain JSON Schema objects with jsonSchema() for AI SDK 5 compatibility
       // Zod schemas have a _def property; plain objects need wrapping
-      const resolvedSchema = schema && schema._def ? schema : jsonSchema(schema);
+      const sanitizedSchema = sanitizeToolInputSchema(schema);
+      const resolvedSchema = sanitizedSchema && sanitizedSchema._def ? sanitizedSchema : jsonSchema(sanitizedSchema);
       return tool({
         description,
         inputSchema: resolvedSchema,
@@ -2089,8 +2250,9 @@ export class ProbeAgent {
       for (const [name, mcpTool] of Object.entries(mcpTools)) {
         // MCP tools have raw JSON Schema inputSchema that must be wrapped with jsonSchema()
         // for the Vercel AI SDK. Without wrapping, asSchema() misidentifies them as Zod schemas.
-        const mcpSchema = mcpTool.inputSchema || mcpTool.parameters;
-        const wrappedSchema = mcpSchema && mcpSchema._def ? mcpSchema : jsonSchema(mcpSchema || { type: 'object', properties: {} });
+        const mcpSchema = mcpTool.inputSchema || mcpTool.parameters || { type: 'object', properties: {} };
+        const sanitizedSchema = sanitizeToolInputSchema(mcpSchema);
+        const wrappedSchema = sanitizedSchema && sanitizedSchema._def ? sanitizedSchema : jsonSchema(sanitizedSchema);
         nativeTools[name] = tool({
           description: mcpTool.description || `MCP tool: ${name}`,
           inputSchema: wrappedSchema,
@@ -2321,16 +2483,16 @@ export class ProbeAgent {
 
         // For Codex CLI, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
-        const systemPrompt = await this.getCodexNativeSystemPrompt();
+        const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
 
         this.engine = await createCodexEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
           systemPrompt: systemPrompt,
-          customPrompt: this.customPrompt,
           sessionId: this.options?.sessionId,
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
-          model: this.model  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          model: this.model,  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          governedCodexProfile: this.governedCodexProfile
         });
         if (this.debug) {
           console.log('[DEBUG] Using Codex CLI engine with Probe tools');
@@ -2340,6 +2502,10 @@ export class ProbeAgent {
         }
         return this.engine;
       } catch (error) {
+        if (this.governedCodexProfile) {
+          throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+            null, null, 'acquire');
+        }
         console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
         console.warn('[WARNING] Falling back to Vercel AI SDK');
         this.clientApiProvider = null;
@@ -3137,6 +3303,43 @@ ${extractGuidance2}
   }
 
   /**
+   * Resolve the Codex system prompt once so preview and runtime bind identical bytes.
+   * @returns {Promise<string>}
+   * @private
+   */
+  _getCachedCodexNativeSystemPrompt() {
+    if (!this._codexNativeSystemPromptPromise) {
+      this._codexNativeSystemPromptPromise = this.getCodexNativeSystemPrompt();
+    }
+    return this._codexNativeSystemPromptPromise;
+  }
+
+  _prepareGovernedAnswerPrompt(message, options) {
+    if (!this.governedCodexProfile) throw new Error('answerGoverned requires governedCodexProfile');
+    if (!message || typeof message !== 'string' || message.trim().length === 0) throw new Error('Message is required and must be a non-empty string');
+    if (!options) throw new Error('answerGoverned requires a valid JSON schema string');
+    const schema = options.schema;
+    if (typeof schema !== 'string' || !schema.trim() || !isJsonSchema(schema)) throw new Error('answerGoverned requires a valid JSON schema string');
+    return { schema, prompt: message.trim() + generateSchemaInstructions(schema, { debug: this.debug }) };
+  }
+
+  /**
+   * Preview the exact governed initial Codex dispatch without acquiring an engine or MCP server.
+   * @param {string} message
+   * @param {{schema: string}} options
+   * @returns {Promise<{source: 'probe-host-tools-call', tool: 'codex', promptDigest: string, promptBytes: number}>}
+   */
+  async previewGovernedAnswerDispatch(message, options) {
+    if (!options || Reflect.ownKeys(options).length !== 1 || !Object.prototype.hasOwnProperty.call(options, 'schema')) {
+      throw new Error('previewGovernedAnswerDispatch requires exactly {schema}');
+    }
+    const { prompt } = this._prepareGovernedAnswerPrompt(message, options);
+    const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
+    const { previewGovernedCodexInitialDispatch } = await import('./engines/codex.js');
+    return previewGovernedCodexInitialDispatch({ systemPrompt, prompt });
+  }
+
+  /**
    * Get the system message with instructions for the AI (XML Tool Format)
    */
   async getSystemMessage() {
@@ -3299,6 +3502,116 @@ Follow these instructions carefully:
   }
 
   /**
+   * Return one schema-validated result with its governed Codex attestation.
+   * @param {string} message - The user's question
+   * @param {Object} options - Governed answer options
+   * @param {string} options.schema - Required JSON schema
+   * @param {Array} [images] - Unsupported; must be empty
+   * @returns {Promise<{data: unknown, runtimeAttestation: Object}>}
+   */
+  async answerGoverned(message, options, images = []) {
+    const { schema, prompt } = this._prepareGovernedAnswerPrompt(message, options);
+    if (!Array.isArray(images) || images.length > 0) throw new Error('answerGoverned does not support images');
+
+    const hasInvocationDigest = Object.prototype.hasOwnProperty.call(options,
+      'invocationDigest');
+    const invocationDigest = hasInvocationDigest ? options.invocationDigest : undefined;
+    if (hasInvocationDigest && (typeof invocationDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(invocationDigest))) {
+      throw new TypeError('answerGoverned invocationDigest must match sha256:<64 lowercase hexadecimal digits>');
+    }
+    const hasResultIdentity = Object.prototype.hasOwnProperty.call(options,
+      'resultIdentity');
+    const requestedResultIdentity = hasResultIdentity ? options.resultIdentity : undefined;
+    if (hasResultIdentity && requestedResultIdentity !== GOVERNED_RESULT_IDENTITY) {
+      throw new TypeError('answerGoverned resultIdentity must equal probe.governed-result-identity/v1');
+    }
+    if (hasResultIdentity && !hasInvocationDigest) {
+      throw new TypeError('answerGoverned resultIdentity requires an own invocationDigest');
+    }
+
+    let engine, answerFailure = null;
+    try {
+      try { engine = await this.getEngine(); }
+      catch (error) {
+        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+          null, null, 'acquire');
+      }
+      if (!engine?.query) throw governedAnswerFailure('internal_contract');
+      const candidateChunks = [];
+      let runtimeAttestation;
+      let attestationCount = 0;
+      let nativeToolBatch;
+      let nativeToolBatchCount = 0;
+      const queryOptions = hasInvocationDigest
+        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest }
+        : { abortSignal: this._abortController.signal };
+      try {
+        for await (const chunk of engine.query(prompt, queryOptions)) {
+          if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
+          else if (chunk.type === 'metadata' && chunk.data?.attestation) {
+            runtimeAttestation = chunk.data.attestation;
+            attestationCount++;
+          } else if (chunk.type === 'toolBatch') {
+            nativeToolBatch = chunk;
+            nativeToolBatchCount++;
+          } else if (chunk.type === 'error') {
+            throw normalizeGovernedAnswerFailure(chunk.error, 'provider_engine', null, null, null,
+              null, null, 'query');
+          }
+        }
+      } catch (error) {
+        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+          null, null, 'query');
+      }
+      if (hasInvocationDigest) {
+        const expectedAttestation = this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2'
+          ? 'probe.governed-codex-attestation/v3' : 'probe.governed-codex-attestation/v2';
+        if (attestationCount !== 1 || runtimeAttestation?.version !== expectedAttestation || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
+          throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+            'invocation_attestation');
+        }
+      } else if (attestationCount !== 1) {
+        throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+          'invocation_attestation');
+      }
+      if (this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2') {
+        if (nativeToolBatchCount !== 1 || !Number.isSafeInteger(nativeToolBatch?.total) ||
+          !Array.isArray(nativeToolBatch?.tools) || nativeToolBatch.total !== runtimeAttestation?.observed?.nativeTools?.total ||
+          JSON.stringify(nativeToolBatch.tools) !== JSON.stringify(runtimeAttestation?.observed?.nativeTools?.tools)) {
+          throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+            'native_capability_aggregate');
+        }
+        for (const toolEvent of nativeToolBatch.tools) this.events.emit('toolCall', toolEvent);
+      } else if (nativeToolBatchCount !== 0) {
+        throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+          'native_capability_aggregate');
+      }
+      const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
+      if (!validation.isValid) throw governedSchemaResultValidationFailure(validation);
+      if (hasResultIdentity) {
+        let identified;
+        try { identified = identifyGovernedResult(validation.parsed); }
+        catch { throw governedAnswerFailure('schema_result_validation', null, null, null, null, 'result_identity'); }
+        const { data, resultIdentity } = identified;
+        freezeGovernedTree(runtimeAttestation);
+        return Object.freeze({ data, runtimeAttestation, resultIdentity });
+      }
+      return { data: validation.parsed, runtimeAttestation };
+    } catch (error) {
+      answerFailure = normalizeGovernedAnswerFailure(error, 'internal_contract');
+      throw answerFailure;
+    } finally {
+      if (engine) {
+        try { await engine.close(); }
+        catch (error) {
+          if (!answerFailure) throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+            null, null, 'close');
+        }
+      }
+    }
+  }
+
+  /**
    * Answer a question using the agentic flow
    * @param {string} message - The user's question
    * @param {Array} [images] - Optional array of image data (base64 strings or URLs)
@@ -3350,14 +3663,19 @@ Follow these instructions carefully:
             this.toolImplementations.task = createTaskTool({
               taskManager: this.taskManager,
               tracer: this.tracer,
-              debug: this.debug
+              debug: this.debug,
+              delegationTask: this.delegationTask
             });
           }
 
           // Record telemetry for task initialization
           if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
             this.tracer.recordTaskEvent('session_started', {
-              'task.enabled': true
+              'task.enabled': true,
+              'agent.session_id': this.tracer?.sessionId ?? null,
+              'agent.parent_session_id': this.tracer?.parentSessionId ?? null,
+              'agent.root_session_id': this.tracer?.rootSessionId ?? null,
+              'agent.kind': this.tracer?.agentKind ?? 'main',
             });
           }
 
@@ -3544,14 +3862,14 @@ Follow these instructions carefully:
         }
 
         // Send the message directly to Codex and collect the response
-        try {
-          const engine = await this.getEngine();
+        let engine; try {
+          engine = await this.getEngine();
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
 
             // Query Codex directly with the message and schema
-            for await (const chunk of engine.query(message, options)) {
+            for await (const chunk of engine.query(message, this.governedCodexProfile ? { ...options, abortSignal: this._abortController.signal } : options)) {
               if (chunk.type === 'text' && chunk.content) {
                 assistantResponseContent += chunk.content;
                 if (options.onStream) {
@@ -3603,7 +3921,7 @@ Follow these instructions carefully:
             console.error('[DEBUG] Codex error:', error);
           }
           throw error;
-        }
+        } finally { if (this.governedCodexProfile && engine) await engine.close(); }
       }
 
       if (this.debug) {
@@ -3684,8 +4002,6 @@ Follow these instructions carefully:
           activeTools.delete(key);
         }
       };
-      this.events.on('toolCall', onToolCall);
-
       // Timeout observer: separate LLM call that decides whether to extend.
       // Runs independently of the main agent loop — works even when blocked by delegates.
       const runTimeoutObserver = async () => {
@@ -4347,80 +4663,92 @@ Double-check your response based on the criteria above. If everything looks good
           }
 
           const executeAIRequest = async () => {
-            const result = await this.streamTextWithRetryAndFallback(streamOptions);
+            return await this.streamTextWithRetryAndFallback(streamOptions, async (result) => {
+              this.events.on('toolCall', onToolCall);
 
-            // Set up timeout timer now that streamText is running.
-            // streamText() returns immediately — the actual tool loop runs asynchronously
-            // and completes when we await result.steps/result.text below.
-            let gracefulTimeoutId = null;
-            let hardAbortTimeoutId = null;
-            if (this.timeoutBehavior === 'graceful' && gracefulTimeoutState && this.maxOperationTimeout > 0) {
-              gracefulTimeoutId = setTimeout(() => {
-                gracefulTimeoutState.triggered = true;
-                if (this.debug) {
-                  console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — entering wind-down mode (${gracefulTimeoutState.bonusStepsMax} bonus steps)`);
-                }
-                // Safety net: hard abort after 60s if wind-down doesn't complete
-                hardAbortTimeoutId = setTimeout(() => {
-                  if (this._abortController) {
-                    this._abortController.abort();
-                  }
+              // Set up timeout timer now that streamText is running.
+              // streamText() returns immediately — the actual tool loop runs asynchronously
+              // and completes when we await result.steps/result.text below.
+              let gracefulTimeoutId = null;
+              let hardAbortTimeoutId = null;
+              if (this.timeoutBehavior === 'graceful' && gracefulTimeoutState && this.maxOperationTimeout > 0) {
+                gracefulTimeoutId = setTimeout(() => {
+                  gracefulTimeoutState.triggered = true;
                   if (this.debug) {
-                    console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
+                    console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — entering wind-down mode (${gracefulTimeoutState.bonusStepsMax} bonus steps)`);
                   }
-                }, 60000);
-              }, this.maxOperationTimeout);
-            }
+                  // Safety net: hard abort after 60s if wind-down doesn't complete
+                  hardAbortTimeoutId = setTimeout(() => {
+                    if (this._abortController) {
+                      this._abortController.abort();
+                    }
+                    if (this.debug) {
+                      console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
+                    }
+                  }, 60000);
+                }, this.maxOperationTimeout);
+              }
 
-            // Negotiated timeout: run the timeout observer (separate LLM call)
-            if (this.timeoutBehavior === 'negotiated' && this.maxOperationTimeout > 0) {
-              negotiatedTimeoutState.softTimeoutId = setTimeout(() => {
-                if (this.debug) {
-                  console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — invoking timeout observer`);
+              // Negotiated timeout: run the timeout observer (separate LLM call)
+              if (this.timeoutBehavior === 'negotiated' && this.maxOperationTimeout > 0) {
+                negotiatedTimeoutState.softTimeoutId = setTimeout(() => {
+                  if (this.debug) {
+                    console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — invoking timeout observer`);
+                  }
+                  runTimeoutObserver();
+                }, this.maxOperationTimeout);
+              }
+
+              try {
+                // Use only the last step's text as the final answer.
+                // result.text concatenates ALL steps (including intermediate planning text),
+                // but the user should only see the final answer from the last step.
+                const steps = await result.steps;
+                let finalText;
+                if (steps && steps.length > 1) {
+                  // Multi-step: use last step's text (the actual answer after tool calls)
+                  const lastStepText = steps[steps.length - 1].text;
+                  finalText = lastStepText || await result.text;
+                } else {
+                  finalText = await result.text;
                 }
-                runTimeoutObserver();
-              }, this.maxOperationTimeout);
-            }
 
-            try {
-              // Use only the last step's text as the final answer.
-              // result.text concatenates ALL steps (including intermediate planning text),
-              // but the user should only see the final answer from the last step.
-              const steps = await result.steps;
-              let finalText;
-              if (steps && steps.length > 1) {
-                // Multi-step: use last step's text (the actual answer after tool calls)
-                const lastStepText = steps[steps.length - 1].text;
-                finalText = lastStepText || await result.text;
-              } else {
-                finalText = await result.text;
-              }
+                // Native schema responses can legitimately carry their payload in result.output
+                // while text and steps stay empty. Plain text answers with no steps and no
+                // text are empty streams and should be retried by the active retry manager.
+                if (!options.schema && (!steps || steps.length === 0) && (!finalText || !finalText.trim())) {
+                  throw Object.assign(
+                    new Error('No output generated. Check the stream for errors.'),
+                    { name: 'AI_NoOutputGeneratedError' }
+                  );
+                }
 
-              if (this.debug) {
-                console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
-              }
+                if (this.debug) {
+                  console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
+                }
 
-              // Record final token usage
-              const usage = await result.usage;
-              if (usage) {
-                this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
-              }
+                // Record final token usage
+                const usage = await result.usage;
+                if (usage) {
+                  this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+                }
 
-              return { finalText, result };
-            } finally {
-              // Clean up graceful timeout timers
-              if (gracefulTimeoutId) clearTimeout(gracefulTimeoutId);
-              if (hardAbortTimeoutId) clearTimeout(hardAbortTimeoutId);
-              // Clean up negotiated timeout timer
-              if (negotiatedTimeoutState.softTimeoutId) clearTimeout(negotiatedTimeoutState.softTimeoutId);
-              // Clean up graceful stop hard abort timer
-              if (this._gracefulStopHardAbortId) {
-                clearTimeout(this._gracefulStopHardAbortId);
-                this._gracefulStopHardAbortId = null;
+                return { finalText, result };
+              } finally {
+                // Clean up graceful timeout timers
+                if (gracefulTimeoutId) clearTimeout(gracefulTimeoutId);
+                if (hardAbortTimeoutId) clearTimeout(hardAbortTimeoutId);
+                // Clean up negotiated timeout timer
+                if (negotiatedTimeoutState.softTimeoutId) clearTimeout(negotiatedTimeoutState.softTimeoutId);
+                // Clean up graceful stop hard abort timer
+                if (this._gracefulStopHardAbortId) {
+                  clearTimeout(this._gracefulStopHardAbortId);
+                  this._gracefulStopHardAbortId = null;
+                }
+                // Remove in-flight tool tracker
+                this.events.removeListener('toolCall', onToolCall);
               }
-              // Remove in-flight tool tracker
-              this.events.removeListener('toolCall', onToolCall);
-            }
+            });
           };
 
           let aiResult;
@@ -5549,6 +5877,8 @@ Double-check your response based on the criteria above. If everything looks good
     if (!this._abortController.signal.aborted) {
       this._abortController.abort();
     }
+
+    if (this.governedCodexProfile && this.engine?.close) await this.engine.close();
 
     // Clean up MCP bridge
     if (this.mcpBridge) {

@@ -4,9 +4,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use probe_code::language::is_test_file;
 use probe_code::models::SearchResult;
 use probe_code::search::query::QueryPlan;
 use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+use probe_code::semantic_context::{
+    classify_scope_from_node, classify_text_matches_in_block, extract_owner_symbol_from_source,
+    language_name_for_path, leading_comments_from_block, EnclosingCall, EnclosingSymbol,
+    ParsedSourceContext, SourceComment, SourceMatch,
+};
 
 /// Create a cache of file contents for outline formatters to avoid redundant I/O
 pub fn create_file_content_cache(results: &[&SearchResult]) -> HashMap<PathBuf, Arc<String>> {
@@ -327,6 +333,8 @@ fn format_and_print_color_results(
             "php" => "php",
             "sh" | "bash" => "bash",
             "qml" => "javascript",
+            "sol" => "solidity",
+            "cr" => "crystal",
             "md" => "markdown",
             "json" => "json",
             "yaml" | "yml" => "yaml",
@@ -338,7 +346,7 @@ fn format_and_print_color_results(
             "scala" => "scala",
             "dart" => "dart",
             "ex" | "exs" => "elixir",
-            "hs" => "haskell",
+            "hs" | "lhs" => "haskell",
             "clj" => "clojure",
             "lua" => "lua",
             "r" => "r",
@@ -569,9 +577,39 @@ fn format_and_print_json_results(
     #[derive(serde::Serialize)]
     struct JsonResult<'a> {
         file: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        language: Option<&'static str>,
         lines: [usize; 2],
         node_type: &'a str,
         code: &'a str,
+        // Structural classification of the block
+        scope: &'a str,
+        // Whether this result comes from a test file or contains test code
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_test: Option<bool>,
+        // Whether this result comes from a documentation file
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_doc: Option<bool>,
+        // Whether this result is a fenced code example in documentation
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_example: Option<bool>,
+        // The owning symbol name (function, class, method) for this block
+        #[serde(skip_serializing_if = "Option::is_none")]
+        owner_symbol: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        owner_qualified_symbol: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        enclosing_symbols: Vec<EnclosingSymbol>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enclosing_call: Option<EnclosingCall>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        enclosing_calls: Vec<EnclosingCall>,
+        // Raw source comments attached at the start of this block.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        leading_comments: Vec<SourceComment>,
+        // Classified textual match locations within this returned block.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        matches: Vec<SourceMatch>,
         // Symbol signature (when symbols flag is used)
         symbol_signature: Option<&'a String>,
         // Include other relevant fields
@@ -592,22 +630,91 @@ fn format_and_print_json_results(
         all: usize,
     }
 
+    let mut parsed_files: std::collections::HashMap<
+        std::path::PathBuf,
+        Option<ParsedSourceContext>,
+    > = std::collections::HashMap::new();
+
     let json_results: Vec<JsonResult> = results
         .iter()
-        .map(|r| JsonResult {
-            file: &r.file,
-            lines: [r.lines.0, r.lines.1],
-            node_type: &r.node_type,
-            code: &r.code,
-            symbol_signature: r.symbol_signature.as_ref(),
-            matched_keywords: r.matched_keywords.as_ref(),
-            score: r.score,
-            tfidf_score: r.tfidf_score,
-            bm25_score: r.bm25_score,
-            file_unique_terms: r.file_unique_terms,
-            file_total_matches: r.file_total_matches,
-            block_unique_terms: r.block_unique_terms,
-            block_total_matches: r.block_total_matches,
+        .map(|r| {
+            let file_path = Path::new(&r.file);
+            let doc = is_doc_file(file_path);
+            let fenced_example = doc && is_fenced_example(&r.node_type);
+
+            // Compute is_test: true for real test code, NOT for doc/fenced examples
+            let file_is_test = !doc && is_test_file(file_path);
+            let code_is_test = !doc && !file_is_test && is_test_code_block(&r.code, &r.node_type);
+            let is_test = if file_is_test || code_is_test {
+                Some(true)
+            } else {
+                None
+            };
+
+            let scope = classify_scope(
+                &r.node_type,
+                &r.code,
+                doc,
+                fenced_example,
+                is_test.is_some(),
+            );
+            let owner = extract_owner_symbol(&r.code, &r.node_type);
+            let owner_context = {
+                let parsed = parsed_files
+                    .entry(file_path.to_path_buf())
+                    .or_insert_with(|| ParsedSourceContext::parse(file_path));
+                parsed
+                    .as_ref()
+                    .and_then(|parsed| parsed.search_owner_context(r.lines.0, r.lines.1, &r.code))
+            };
+            let leading_comments = leading_comments_from_block(&r.code, r.lines.0);
+            let matches = classify_text_matches_in_block(
+                &r.code,
+                r.lines.0,
+                r.matched_keywords.as_ref(),
+                &leading_comments,
+            );
+
+            JsonResult {
+                file: &r.file,
+                language: language_name_for_path(file_path),
+                lines: [r.lines.0, r.lines.1],
+                node_type: &r.node_type,
+                code: &r.code,
+                scope,
+                is_test,
+                is_doc: if doc { Some(true) } else { None },
+                is_example: if fenced_example { Some(true) } else { None },
+                owner_symbol: owner_context
+                    .as_ref()
+                    .and_then(|context| context.symbol.clone())
+                    .or(owner),
+                owner_qualified_symbol: owner_context
+                    .as_ref()
+                    .and_then(|context| context.qualified_symbol.clone()),
+                enclosing_symbols: owner_context
+                    .as_ref()
+                    .map(|context| context.enclosing_symbols.clone())
+                    .unwrap_or_default(),
+                enclosing_call: owner_context
+                    .as_ref()
+                    .and_then(|context| context.enclosing_call.clone()),
+                enclosing_calls: owner_context
+                    .as_ref()
+                    .map(|context| context.enclosing_calls.clone())
+                    .unwrap_or_default(),
+                leading_comments,
+                matches,
+                symbol_signature: r.symbol_signature.as_ref(),
+                matched_keywords: r.matched_keywords.as_ref(),
+                score: r.score,
+                tfidf_score: r.tfidf_score,
+                bm25_score: r.bm25_score,
+                file_unique_terms: r.file_unique_terms,
+                file_total_matches: r.file_total_matches,
+                block_unique_terms: r.block_unique_terms,
+                block_total_matches: r.block_total_matches,
+            }
         })
         .collect();
 
@@ -683,12 +790,297 @@ fn format_and_print_json_results(
     Ok(())
 }
 
+/// Check if a file is a documentation/help file based on path and extension.
+fn is_doc_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+
+    // Check extension
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if matches!(ext, "md" | "mdx" | "rst" | "adoc" | "txt") {
+            return true;
+        }
+    }
+
+    // Check directory patterns
+    let path_lower = path_str.to_lowercase();
+    path_lower.contains("/docs/")
+        || path_lower.contains("/doc/")
+        || path_lower.contains("/help/")
+        || path_lower.contains("/specs/")
+        || path_lower.contains("/.proof/")
+        || path_lower.contains("/examples/") && path_str.ends_with(".md")
+}
+
+/// Check if a node_type represents a fenced code block (Markdown example).
+fn is_fenced_example(node_type: &str) -> bool {
+    node_type == "fenced_code_block"
+        || node_type == "code_block"
+        || node_type == "indented_code_block"
+}
+
+/// Heuristic check for test-like code blocks based on content patterns.
+///
+/// This complements `is_test_file()` (which checks file naming) by detecting
+/// individual test functions/blocks in files that aren't named as test files
+/// (e.g., inline `#[cfg(test)]` modules in Rust, or mixed test/impl files).
+fn is_test_code_block(code: &str, node_type: &str) -> bool {
+    // Skip pure type/struct declarations that aren't test constructs
+    let is_structural_only = node_type == "type_declaration"
+        || node_type == "struct_item"
+        || node_type == "struct_declaration"
+        || node_type == "package_clause"
+        || node_type == "import_declaration";
+
+    if is_structural_only {
+        return false;
+    }
+
+    // Check for common test patterns across languages in the code content.
+    // We check the code itself rather than relying only on node_type because
+    // comment-attached-to-declaration blocks may have node_type "comment"
+    // while the code includes both the comment and its owning test function.
+    let first_lines: String = code.lines().take(10).collect::<Vec<_>>().join("\n");
+
+    // Rust: #[test], #[cfg(test)]
+    if first_lines.contains("#[test]") || first_lines.contains("#[cfg(test)]") {
+        return true;
+    }
+
+    // Python: def test_
+    if first_lines.contains("def test_") {
+        return true;
+    }
+
+    // JS/TS: test(...), describe(...), it(...)
+    if contains_call_name(&first_lines, "test")
+        || contains_call_name(&first_lines, "describe")
+        || contains_call_name(&first_lines, "it")
+    {
+        return true;
+    }
+
+    // Go: func Test
+    if first_lines.contains("func Test") {
+        return true;
+    }
+
+    // Java/C#: @Test
+    if first_lines.contains("@Test") {
+        return true;
+    }
+
+    false
+}
+
+fn contains_call_name(code: &str, name: &str) -> bool {
+    let bytes = code.as_bytes();
+    let mut offset = 0;
+
+    while let Some(relative) = code[offset..].find(name) {
+        let start = offset + relative;
+        let end = start + name.len();
+        let before = start.checked_sub(1).map(|index| bytes[index]);
+        let after = bytes.get(end).copied();
+
+        let valid_before = before
+            .map(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'))
+            .unwrap_or(true);
+
+        if valid_before && after == Some(b'(') {
+            return true;
+        }
+
+        offset = end;
+    }
+
+    false
+}
+
+/// Classify the structural scope of a search result block.
+///
+/// Returns one of: "test", "example", "doc", "function", "declaration", "module", "file"
+fn classify_scope<'a>(
+    node_type: &str,
+    code: &str,
+    is_doc: bool,
+    is_example: bool,
+    is_test: bool,
+) -> &'a str {
+    let shared_scope = classify_scope_from_node(node_type, code, is_doc, is_example, is_test);
+    if shared_scope != "declaration" {
+        return shared_scope;
+    }
+
+    // Comment blocks attached to functions — check code content for function signature
+    if node_type.contains("comment") {
+        let has_func = code.contains("func ")
+            || code.contains("fn ")
+            || code.contains("def ")
+            || code.contains("function ")
+            || code.contains("test(")
+            || code.contains("describe(");
+        if has_func {
+            return "function";
+        }
+        return "declaration";
+    }
+
+    // Default: treat as declaration
+    "declaration"
+}
+
+/// Extract the owning symbol name (function, class, method) from code content.
+///
+/// Returns the first recognizable symbol declaration name, or None.
+fn extract_owner_symbol(code: &str, node_type: &str) -> Option<String> {
+    // Skip doc-only blocks with no code
+    if node_type == "section"
+        || node_type == "document"
+        || node_type == "paragraph"
+        || node_type == "heading"
+    {
+        return None;
+    }
+
+    if let Some(owner) = extract_owner_symbol_from_source(code, node_type) {
+        return Some(owner);
+    }
+
+    for line in code.lines().take(15) {
+        let trimmed = line.trim();
+
+        // Go: func TestName(... or func (r *Recv) MethodName(...
+        if let Some(rest) = trimmed.strip_prefix("func ") {
+            // Method with receiver: (r *Type) Name(
+            if rest.starts_with('(') {
+                if let Some(after_recv) = rest.split(')').nth(1) {
+                    let name = after_recv.trim().split('(').next().unwrap_or("").trim();
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            } else {
+                let name = rest.split('(').next().unwrap_or("").trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+
+        // Rust: fn name( or pub fn name( or pub(crate) fn name(
+        if let Some(fn_pos) = trimmed.find("fn ") {
+            let after_fn = &trimmed[fn_pos + 3..];
+            // Only match if "fn" is at start or preceded by whitespace/paren (not part of another word)
+            let valid_prefix = fn_pos == 0
+                || trimmed
+                    .as_bytes()
+                    .get(fn_pos - 1)
+                    .map_or(false, |&b| b == b' ' || b == b')');
+            if valid_prefix {
+                let name = after_fn
+                    .split(|c: char| c == '(' || c == '<' || c == ' ')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+
+        // Python: def name( or class Name(
+        if let Some(rest) = trimmed.strip_prefix("def ") {
+            let name = rest.split('(').next().unwrap_or("").trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("class ") {
+            let name = rest
+                .split(|c: char| c == '(' || c == ':')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+
+        // JS/TS: function name(, const name =, class Name
+        if let Some(rest) = trimmed.strip_prefix("function ") {
+            let name = rest.split('(').next().unwrap_or("").trim();
+            if !name.is_empty() && name != "*" {
+                return Some(name.to_string());
+            }
+        }
+        // async function name(
+        if let Some(rest) = trimmed.strip_prefix("async function ") {
+            let name = rest.split('(').next().unwrap_or("").trim();
+            if !name.is_empty() && name != "*" {
+                return Some(name.to_string());
+            }
+        }
+        // export function name(
+        if let Some(rest) = trimmed.strip_prefix("export function ") {
+            let name = rest.split('(').next().unwrap_or("").trim();
+            if !name.is_empty() && name != "*" {
+                return Some(name.to_string());
+            }
+        }
+        // export default function name(
+        if let Some(rest) = trimmed.strip_prefix("export default function ") {
+            let name = rest.split('(').next().unwrap_or("").trim();
+            if !name.is_empty() && name != "*" {
+                return Some(name.to_string());
+            }
+        }
+
+        // Java/C#: public void methodName( or class ClassName
+        // Look for access modifier + return type + name pattern
+        if trimmed.starts_with("public ")
+            || trimmed.starts_with("private ")
+            || trimmed.starts_with("protected ")
+            || trimmed.starts_with("internal ")
+        {
+            // class/interface declaration
+            if trimmed.contains(" class ") || trimmed.contains(" interface ") {
+                let keyword = if trimmed.contains(" class ") {
+                    " class "
+                } else {
+                    " interface "
+                };
+                if let Some(after) = trimmed.split(keyword).nth(1) {
+                    let name = after
+                        .split(|c: char| c == '{' || c == '(' || c == '<' || c == ' ' || c == ':')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+
+        // Go type declarations: type Name struct/interface
+        if let Some(rest) = trimmed.strip_prefix("type ") {
+            let name = rest.split_whitespace().next().unwrap_or("").trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 /// Format and print search results in XML format
 fn format_and_print_xml_results(
     results: &[&SearchResult],
     skipped_files: Option<&[SearchResult]>,
     limits: Option<&probe_code::models::SearchLimits>,
 ) -> Result<()> {
+    println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     println!("<probe_results>");
 
     for result in results {
@@ -741,7 +1133,10 @@ fn format_and_print_xml_results(
             println!("    <block_total_matches>{block_total_matches}</block_total_matches>");
         }
 
-        println!("    <code>{}</code>", result.code);
+        println!(
+            "    <code><![CDATA[{}]]></code>",
+            result.code.replace("]]>", "]]]]><![CDATA[>")
+        );
         println!("  </result>");
     }
 
@@ -1959,10 +2354,11 @@ fn get_comment_prefix(extension: &str) -> &'static str {
     match extension {
         // C-style comments
         "rs" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "java" | "js" | "jsx" | "ts"
-        | "tsx" | "cs" | "swift" | "go" | "php" | "qml" => "//",
+        | "tsx" | "cs" | "swift" | "go" | "php" | "qml" | "sol" => "//",
 
         // Python-style comments
-        "py" | "rb" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
+        "py" | "rb" | "cr" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
+        "hs" | "lhs" => "--",
 
         // HTML-style comments
         "md" | "markdown" => "<!--",
@@ -2290,9 +2686,19 @@ fn format_and_print_outline_results(
             .push(result);
     }
 
-    // Sort files for consistent output
+    // Sort file groups by their best (lowest = most relevant) individual result rank, not
+    // alphabetically by path. `results` is already in relevance order by the time it gets here,
+    // so grouping-then-alphabetizing was silently discarding that order: which files appear
+    // depends on --max-results, so an alphabetical re-sort meant a larger --max-results could
+    // shuffle files that were already being displayed instead of simply revealing more of the
+    // same ordering. Fall back to the path for a deterministic tie-break when ranks are equal
+    // or unavailable.
     let mut files: Vec<(String, Vec<&SearchResult>)> = files_map.into_iter().collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| {
+        let rank_a = a.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        let rank_b = b.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        rank_a.cmp(&rank_b).then_with(|| a.0.cmp(&b.0))
+    });
 
     // Sort results within each file by line number (not by score)
     for (_, file_results) in &mut files {
@@ -2473,9 +2879,19 @@ fn format_and_print_outline_xml_results(
             .push(result);
     }
 
-    // Sort files for consistent output
+    // Sort file groups by their best (lowest = most relevant) individual result rank, not
+    // alphabetically by path. `results` is already in relevance order by the time it gets here,
+    // so grouping-then-alphabetizing was silently discarding that order: which files appear
+    // depends on --max-results, so an alphabetical re-sort meant a larger --max-results could
+    // shuffle files that were already being displayed instead of simply revealing more of the
+    // same ordering. Fall back to the path for a deterministic tie-break when ranks are equal
+    // or unavailable.
     let mut files: Vec<(String, Vec<&SearchResult>)> = files_map.into_iter().collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| {
+        let rank_a = a.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        let rank_b = b.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        rank_a.cmp(&rank_b).then_with(|| a.0.cmp(&b.0))
+    });
 
     // Sort results within each file by line number (not by score)
     for (_, file_results) in &mut files {
@@ -3027,5 +3443,412 @@ mod tests {
 
         assert_eq!(cache.get(&path1).unwrap().as_ref(), content1);
         assert_eq!(cache.get(&path2).unwrap().as_ref(), content2);
+    }
+
+    #[test]
+    fn test_is_test_code_block_rust() {
+        assert!(is_test_code_block(
+            "#[test]\nfn test_something() {}",
+            "function_item"
+        ));
+        assert!(is_test_code_block("#[cfg(test)]\nmod tests {}", "module"));
+        assert!(!is_test_code_block("fn main() {}", "function_item"));
+    }
+
+    #[test]
+    fn test_is_test_code_block_python() {
+        assert!(is_test_code_block(
+            "def test_something():\n    pass",
+            "function_definition"
+        ));
+        assert!(!is_test_code_block(
+            "def something():\n    pass",
+            "function_definition"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_js() {
+        assert!(is_test_code_block(
+            "test('gamma', () => {})",
+            "call_expression"
+        ));
+        assert!(is_test_code_block(
+            "describe('suite', () => {})",
+            "call_expression"
+        ));
+        assert!(is_test_code_block(
+            "it('should work', () => {})",
+            "call_expression"
+        ));
+        assert!(!is_test_code_block(
+            "function quorumNumerator() public view returns (uint256) {\n    return history.latest();\n}",
+            "function_definition"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_go() {
+        assert!(is_test_code_block(
+            "func TestSomething(t *testing.T) {}",
+            "function_definition"
+        ));
+        assert!(!is_test_code_block(
+            "func Something() {}",
+            "function_definition"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_comment_with_test_function() {
+        // Comment nodes that include an attached test function should be detected
+        assert!(is_test_code_block(
+            "# Verifies: REQ-001\ndef test_beta():\n    pass",
+            "comment"
+        ));
+        assert!(is_test_code_block(
+            "// Verifies: REQ-001\ntest('gamma', () => {})",
+            "comment"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_type_declarations_excluded() {
+        // Type declarations should never be detected as test blocks
+        assert!(!is_test_code_block(
+            "type TestStruct struct{}",
+            "type_declaration"
+        ));
+        assert!(!is_test_code_block(
+            "// Verifies: REQ-001\npackage workflow\ntype Foo struct{}",
+            "type_declaration"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_plain_comment_not_test() {
+        // A comment without test function code should not be detected as test
+        assert!(!is_test_code_block(
+            "// Verifies: REQ-001\n// Some regular comment",
+            "comment"
+        ));
+    }
+
+    // --- is_doc_file tests ---
+
+    #[test]
+    fn test_is_doc_file_markdown() {
+        assert!(is_doc_file(Path::new("README.md")));
+        assert!(is_doc_file(Path::new("docs/help/checks/code_mcdc.md")));
+        assert!(is_doc_file(Path::new("project/doc/guide.rst")));
+        assert!(is_doc_file(Path::new("notes.txt")));
+    }
+
+    #[test]
+    fn test_is_doc_file_directories() {
+        assert!(is_doc_file(Path::new("/repo/docs/api.md")));
+        assert!(is_doc_file(Path::new("/repo/help/commands/mcdc.md")));
+        assert!(is_doc_file(Path::new("/repo/.proof/evidence.md")));
+    }
+
+    #[test]
+    fn test_is_doc_file_source_not_doc() {
+        assert!(!is_doc_file(Path::new("src/main.rs")));
+        assert!(!is_doc_file(Path::new("pkg/workflow/workflow_test.go")));
+        assert!(!is_doc_file(Path::new("lib/utils.py")));
+    }
+
+    // --- is_fenced_example tests ---
+
+    #[test]
+    fn test_is_fenced_example() {
+        assert!(is_fenced_example("fenced_code_block"));
+        assert!(is_fenced_example("code_block"));
+        assert!(is_fenced_example("indented_code_block"));
+        assert!(!is_fenced_example("function_definition"));
+        assert!(!is_fenced_example("comment"));
+    }
+
+    // --- classify_scope tests ---
+
+    #[test]
+    fn test_classify_scope_test() {
+        assert_eq!(
+            classify_scope("function_definition", "func TestFoo()", false, false, true),
+            "test"
+        );
+    }
+
+    #[test]
+    fn test_classify_scope_example() {
+        assert_eq!(
+            classify_scope(
+                "fenced_code_block",
+                "```go\nfunc Test()```",
+                true,
+                true,
+                false
+            ),
+            "example"
+        );
+    }
+
+    #[test]
+    fn test_classify_scope_doc() {
+        assert_eq!(
+            classify_scope("section", "# Overview", true, false, false),
+            "doc"
+        );
+    }
+
+    #[test]
+    fn test_classify_scope_function() {
+        assert_eq!(
+            classify_scope("function_definition", "func foo()", false, false, false),
+            "function"
+        );
+        assert_eq!(
+            classify_scope("method_declaration", "void run()", false, false, false),
+            "function"
+        );
+        assert_eq!(
+            classify_scope("arrow_function", "() => {}", false, false, false),
+            "function"
+        );
+    }
+
+    #[test]
+    fn test_classify_scope_declaration() {
+        assert_eq!(
+            classify_scope("type_declaration", "type Foo struct{}", false, false, false),
+            "declaration"
+        );
+        assert_eq!(
+            classify_scope("class_declaration", "class Foo {}", false, false, false),
+            "declaration"
+        );
+        assert_eq!(
+            classify_scope("struct_item", "struct Bar {}", false, false, false),
+            "declaration"
+        );
+        assert_eq!(
+            classify_scope(
+                "interface_declaration",
+                "interface IFoo {}",
+                false,
+                false,
+                false
+            ),
+            "declaration"
+        );
+    }
+
+    #[test]
+    fn test_classify_scope_module() {
+        assert_eq!(
+            classify_scope("module", "mod foo;", false, false, false),
+            "module"
+        );
+        assert_eq!(
+            classify_scope("program", "#!/bin/bash", false, false, false),
+            "module"
+        );
+    }
+
+    #[test]
+    fn test_classify_scope_comment_with_function() {
+        assert_eq!(
+            classify_scope(
+                "comment",
+                "// Verifies: REQ\nfunc TestFoo(t *testing.T) {}",
+                false,
+                false,
+                false
+            ),
+            "function"
+        );
+    }
+
+    #[test]
+    fn test_classify_scope_comment_without_function() {
+        assert_eq!(
+            classify_scope(
+                "comment",
+                "// Verifies: REQ-001\npackage workflow",
+                false,
+                false,
+                false
+            ),
+            "declaration"
+        );
+    }
+
+    // --- extract_owner_symbol tests ---
+
+    #[test]
+    fn test_extract_owner_go_function() {
+        assert_eq!(
+            extract_owner_symbol(
+                "func TestFormatNested(t *testing.T) {\n    t.Parallel()\n}",
+                "function_definition"
+            ),
+            Some("TestFormatNested".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_go_method() {
+        assert_eq!(
+            extract_owner_symbol(
+                "func (c *codeMCDCCoverageCheck) Run(ctx context.Context) error {",
+                "function_definition"
+            ),
+            Some("Run".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_go_type() {
+        assert_eq!(
+            extract_owner_symbol("type codeMCDCCoverageCheck struct{}", "type_declaration"),
+            Some("codeMCDCCoverageCheck".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_rust_function() {
+        assert_eq!(
+            extract_owner_symbol("#[test]\nfn test_something() {}", "function_item"),
+            Some("test_something".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_rust_pub_fn() {
+        assert_eq!(
+            extract_owner_symbol(
+                "pub fn calculate_score(items: &[i32]) -> i32 {}",
+                "function_item"
+            ),
+            Some("calculate_score".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_python() {
+        assert_eq!(
+            extract_owner_symbol("def test_beta():\n    pass", "function_definition"),
+            Some("test_beta".to_string())
+        );
+        assert_eq!(
+            extract_owner_symbol("class TestSuite:\n    pass", "class_definition"),
+            Some("TestSuite".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_js_function() {
+        assert_eq!(
+            extract_owner_symbol("function handleClick() {}", "function_declaration"),
+            Some("handleClick".to_string())
+        );
+        assert_eq!(
+            extract_owner_symbol("async function fetchData() {}", "function_declaration"),
+            Some("fetchData".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_ts_method_and_exported_arrow() {
+        assert_eq!(
+            extract_owner_symbol(
+                "  // Implements: SYS-REQ-424\n  async evaluatePolicy(input: string): Promise<boolean> {\n    return true;\n  }",
+                "method_definition"
+            ),
+            Some("evaluatePolicy".to_string())
+        );
+        assert_eq!(
+            extract_owner_symbol(
+                "// Implements: SYS-REQ-425\nexport const normalizeDecision = (raw: string) => {\n  return raw.trim();\n};",
+                "export_statement"
+            ),
+            Some("normalizeDecision".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_comment_with_function() {
+        assert_eq!(
+            extract_owner_symbol(
+                "// Verifies: SYS-REQ-042\nfunc TestBeta(t *testing.T) {}",
+                "comment"
+            ),
+            Some("TestBeta".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_doc_nodes_none() {
+        assert_eq!(extract_owner_symbol("# Heading", "heading"), None);
+        assert_eq!(extract_owner_symbol("Some text", "paragraph"), None);
+    }
+
+    // --- Integration: fenced code in docs should NOT get is_test ---
+
+    #[test]
+    fn test_fenced_code_in_docs_not_test() {
+        // Simulates a fenced code block in markdown docs that contains test patterns
+        let code = "```go\n// Verifies: SYS-REQ-985\nfunc TestShared(t *testing.T) {\n    t.Parallel()\n}\n```";
+        let node_type = "fenced_code_block";
+        let file = Path::new("docs/help/checks/code_mcdc_coverage.md");
+
+        let doc = is_doc_file(file);
+        let fenced = doc && is_fenced_example(node_type);
+        let file_is_test = !doc && is_test_file(file);
+        let code_is_test = !doc && !file_is_test && is_test_code_block(code, node_type);
+
+        assert!(doc, "should be doc");
+        assert!(fenced, "should be fenced example");
+        assert!(!file_is_test, "doc should not be test file");
+        assert!(!code_is_test, "doc code should not be test code");
+
+        let scope = classify_scope(node_type, code, doc, fenced, false);
+        assert_eq!(scope, "example");
+    }
+
+    #[test]
+    fn test_real_test_file_gets_test_scope() {
+        let code =
+            "// Verifies: SYS-REQ-985\nfunc TestFormatNested(t *testing.T) {\n    t.Parallel()\n}";
+        let node_type = "function_definition";
+        let file = Path::new("pkg/workflow/workflow_code_mcdc_test.go");
+
+        let doc = is_doc_file(file);
+        let file_is_test = !doc && is_test_file(file);
+
+        assert!(!doc);
+        assert!(file_is_test);
+
+        let scope = classify_scope(node_type, code, doc, false, true);
+        assert_eq!(scope, "test");
+    }
+
+    #[test]
+    fn test_implementation_file_gets_declaration_scope() {
+        let code =
+            "// Verifies: SW-REQ-166\npackage workflow\n\ntype codeMCDCCoverageCheck struct{}";
+        let node_type = "type_declaration";
+        let file = Path::new("pkg/workflow/workflow_code_mcdc.go");
+
+        let doc = is_doc_file(file);
+        let file_is_test = !doc && is_test_file(file);
+        let code_is_test = !doc && !file_is_test && is_test_code_block(code, node_type);
+
+        assert!(!doc);
+        assert!(!file_is_test);
+        assert!(!code_is_test);
+
+        let scope = classify_scope(node_type, code, doc, false, false);
+        assert_eq!(scope, "declaration");
     }
 }

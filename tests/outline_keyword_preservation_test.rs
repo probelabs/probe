@@ -3,7 +3,7 @@ use std::process::Command;
 #[test]
 fn test_outline_format_preserves_keywords_in_truncated_arrays() {
     // Run probe search with outline format on a file known to have large arrays with keywords
-    let output = Command::new("./target/release/probe")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
             "search",
             "stemming",
@@ -13,6 +13,11 @@ fn test_outline_format_preserves_keywords_in_truncated_arrays() {
         ])
         .output()
         .expect("Failed to execute probe command");
+    assert!(
+        output.status.success(),
+        "probe command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 in output");
 
@@ -40,7 +45,7 @@ fn test_outline_format_preserves_keywords_in_truncated_arrays() {
 #[test]
 fn test_outline_format_highlights_keywords_in_comments() {
     // Test that keywords are highlighted in function signatures and comments
-    let output = Command::new("./target/release/probe")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
             "search",
             "stem",
@@ -50,6 +55,11 @@ fn test_outline_format_highlights_keywords_in_comments() {
         ])
         .output()
         .expect("Failed to execute probe command");
+    assert!(
+        output.status.success(),
+        "probe command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 in output");
 

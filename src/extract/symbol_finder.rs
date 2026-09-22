@@ -25,6 +25,7 @@ fn get_qualified_name<'a>(
                 if child.kind() == "identifier"
                     || child.kind() == "type_identifier"
                     || child.kind() == "field_identifier"
+                    || child.kind() == "constant"
                     || child.kind() == "name"
                 {
                     if let Ok(name) = child.utf8_text(content) {
@@ -54,14 +55,19 @@ fn find_all_symbol_nodes<'a>(
     language_impl: &dyn crate::language::language_trait::LanguageImpl,
     content: &'a [u8],
     debug_mode: bool,
+    include_symbol_nodes: bool,
     matches: &mut Vec<tree_sitter::Node<'a>>,
 ) {
     let current_symbol = symbol_parts[0];
     let is_nested = symbol_parts.len() > 1;
     let mut found_here = false;
 
-    // Check if this node is an acceptable parent (function, struct, class, etc.)
-    if language_impl.is_acceptable_parent(&node) {
+    // Check if this node is an acceptable parent (function, struct, class, etc.).
+    // Haskell operator definitions can be represented only by a signature node,
+    // so Haskell callers also opt into language-level symbol nodes.
+    if language_impl.is_acceptable_parent(&node)
+        || (include_symbol_nodes && language_impl.is_symbol_node(&node))
+    {
         if debug_mode {
             println!(
                 "[DEBUG] [find_all] Checking node type '{}' at {}:{} for symbol '{}'",
@@ -85,7 +91,13 @@ fn find_all_symbol_nodes<'a>(
                 || child.kind() == "field_identifier"
                 || child.kind() == "type_identifier"
                 || child.kind() == "property_identifier"
+                || child.kind() == "constant"
                 || child.kind() == "name"
+                || child.kind() == "variable"
+                || child.kind() == "constructor"
+                || child.kind() == "module_id"
+                || child.kind() == "field_name"
+                || child.kind() == "prefix_id"
             // PHP uses "name" for identifiers
             {
                 if let Ok(name) = child.utf8_text(content) {
@@ -113,6 +125,7 @@ fn find_all_symbol_nodes<'a>(
                                     language_impl,
                                     content,
                                     debug_mode,
+                                    include_symbol_nodes,
                                     matches,
                                 );
                             }
@@ -154,6 +167,7 @@ fn find_all_symbol_nodes<'a>(
                                             language_impl,
                                             content,
                                             debug_mode,
+                                            include_symbol_nodes,
                                             matches,
                                         );
                                     }
@@ -185,6 +199,7 @@ fn find_all_symbol_nodes<'a>(
                 language_impl,
                 content,
                 debug_mode,
+                include_symbol_nodes,
                 matches,
             );
         }
@@ -420,6 +435,7 @@ pub fn find_all_symbols_in_file(
     crate::language::return_pooled_parser(extension, parser);
 
     let root_node = tree.root_node();
+    let include_symbol_nodes = matches!(extension, "hs" | "lhs");
 
     if debug_mode {
         println!("[DEBUG] File parsed successfully");
@@ -435,6 +451,7 @@ pub fn find_all_symbols_in_file(
         language_impl.as_ref(),
         content.as_bytes(),
         debug_mode,
+        include_symbol_nodes,
         &mut matched_nodes,
     );
 
@@ -504,6 +521,14 @@ pub fn find_all_symbols_in_file(
     // If no AST matches, fall back to text search
     if matched_nodes.is_empty() {
         return text_search_fallback(path, symbol, content, context_lines, debug_mode);
+    }
+
+    if include_symbol_nodes
+        && matched_nodes
+            .iter()
+            .any(|node| !matches!(node.kind(), "signature" | "default_signature"))
+    {
+        matched_nodes.retain(|node| !matches!(node.kind(), "signature" | "default_signature"));
     }
 
     // Build SearchResults with qualified names for disambiguation
@@ -870,6 +895,128 @@ fn test_function() {
         }
 
         // Clean up
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_ruby_class_and_nested_method_extraction() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_ruby_nested_symbols.rb");
+
+        let content = r#"module RuboCop
+  module Cop
+    class Base
+      def self.documentation_url(config = nil)
+        Documentation.url_for(self, config)
+      end
+
+      def add_offense(node_or_range, message: nil, severity: nil, &block)
+        current_offenses << node_or_range
+      end
+    end
+  end
+end
+"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{content}").unwrap();
+
+        let class_result = find_symbol_in_file(&test_file, "Base", content, true, 0)
+            .expect("Ruby class lookup should use AST instead of text fallback");
+        assert_eq!(class_result.node_type, "class");
+        assert!(class_result.code.contains("class Base"));
+
+        let method_result = find_symbol_in_file(&test_file, "Base.add_offense", content, true, 0)
+            .expect("Ruby nested method lookup should resolve inside class");
+        assert_eq!(method_result.node_type, "method");
+        assert!(method_result.code.contains("def add_offense"));
+        assert!(method_result.code.contains("current_offenses"));
+
+        let singleton_result =
+            find_symbol_in_file(&test_file, "Base.documentation_url", content, true, 0)
+                .expect("Ruby singleton method lookup should resolve inside class");
+        assert_eq!(singleton_result.node_type, "singleton_method");
+        assert!(singleton_result.code.contains("def self.documentation_url"));
+
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_cpp_header_symbol_extraction() {
+        // Regression: `.h` headers holding C++ (namespaces, classes, templates,
+        // attributes) used to be routed to the C grammar, which failed to parse them
+        // (ERROR root) and fell back to a single-line text_search. They must now
+        // resolve to their full C++ AST nodes.
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_cpp_header_extraction.h");
+
+        let content = r#"#pragma once
+
+namespace myapp::security {
+
+class [[nodiscard]] result {
+public:
+    result() = default;
+    bool ok() const {
+        return code_ == 0;
+    }
+private:
+    int code_ = 0;
+};
+
+struct credentials {
+    std::string user;
+    std::string password;
+};
+
+int compute_hash(const std::string& input, int seed) {
+    int h = seed;
+    return h;
+}
+
+template <typename T>
+class holder {
+public:
+    explicit holder(T value) : value_(value) {}
+private:
+    T value_;
+};
+
+} // namespace myapp::security
+"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{content}").unwrap();
+
+        // Class with a [[nodiscard]] attribute -> full class_specifier, not text_search.
+        let class_result = find_symbol_in_file(&test_file, "result", content, true, 0)
+            .expect("C++ class in .h header should resolve via AST");
+        assert_eq!(
+            class_result.node_type, "class_specifier",
+            "expected full class node, got {:?} ({:?})",
+            class_result.node_type, class_result.lines
+        );
+        assert!(class_result.code.contains("bool ok() const"));
+        assert!(class_result.code.contains("int code_ = 0;"));
+
+        // Struct -> struct_specifier.
+        let struct_result = find_symbol_in_file(&test_file, "credentials", content, true, 0)
+            .expect("C++ struct in .h header should resolve via AST");
+        assert_eq!(struct_result.node_type, "struct_specifier");
+        assert!(struct_result.code.contains("std::string password"));
+
+        // Free function -> function_definition.
+        let func_result = find_symbol_in_file(&test_file, "compute_hash", content, true, 0)
+            .expect("C++ free function in .h header should resolve via AST");
+        assert_eq!(func_result.node_type, "function_definition");
+        assert!(func_result.code.contains("int h = seed;"));
+
+        // Templated class -> class_specifier (name lives under template_declaration).
+        let template_result = find_symbol_in_file(&test_file, "holder", content, true, 0)
+            .expect("C++ template class in .h header should resolve via AST");
+        assert_eq!(template_result.node_type, "class_specifier");
+        assert!(template_result.code.contains("explicit holder(T value)"));
+
         let _ = fs::remove_file(&test_file);
     }
 

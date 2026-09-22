@@ -183,10 +183,12 @@ class User extends BaseModel implements SearchableInterface
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "search",
-        "class|trait|interface|function",
+        "Cacheable OR SearchableInterface OR BaseModel OR __construct OR App\\Core",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
+        "--max-results",
+        "20",
     ])?;
 
     // Should extract PHP-specific constructs
@@ -323,10 +325,12 @@ class FlowController
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
         "search",
-        "class|trait|interface|function",
+        "processData OR complexLogic OR foreach OR switch OR finally",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
+        "--max-results",
+        "20",
     ])?;
 
     // Should show control flow structures
@@ -462,11 +466,14 @@ function validateCalculatorBehavior(): bool
 
     let ctx = TestContext::new();
     let output = ctx.run_probe(&[
-        "extract",
+        "search",
+        "CalculatorTest OR it_can_add_two_numbers OR testMultiplication OR testSimpleAddition",
         test_file.to_str().unwrap(),
         "--format",
         "outline",
         "--allow-tests",
+        "--max-results",
+        "20",
     ])?;
 
     // Should detect PHPUnit test class

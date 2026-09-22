@@ -1,4 +1,5 @@
 use anyhow::Result;
+use probe_code::file_guard;
 use probe_code::search::file_list_cache;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -28,7 +29,7 @@ use probe_code::search::{
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
-    simd_pattern_matching::SimdPatternMatcher,
+    simd_pattern_matching::{SimdPatternConfig, SimdPatternMatcher},
     timeout,
 };
 
@@ -565,55 +566,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         // Process files that matched by filename
         for (pathbuf, matched_terms) in &filename_matches {
-            // Define a reasonable maximum file size (e.g., 10MB)
-            const MAX_FILE_SIZE: u64 = 1024 * 1024;
-
-            // Check file metadata and resolve symlinks before reading
-            let resolved_path = match std::fs::canonicalize(pathbuf.as_path()) {
-                Ok(path) => path,
-                Err(e) => {
-                    if debug_mode {
-                        println!("DEBUG: Error resolving path for {pathbuf:?}: {e:?}");
-                    }
-                    continue;
-                }
-            };
-
-            // Get file metadata to check size and file type
-            let metadata = match std::fs::metadata(&resolved_path) {
-                Ok(meta) => meta,
-                Err(e) => {
-                    if debug_mode {
-                        println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
-                    }
-                    continue;
-                }
-            };
-
-            // Check if the file is too large
-            if metadata.len() > MAX_FILE_SIZE {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
-                        resolved_path,
-                        metadata.len(),
-                        MAX_FILE_SIZE
-                    );
-                }
-                continue;
-            }
-
-            // Read the file content to get the total number of lines
-            let file_content = match std::fs::read_to_string(&resolved_path) {
+            // Read the file content to get the total number of lines. Use the
+            // same guard as content search so filename matches cannot pull in
+            // binary or oversized files.
+            let file_content = match file_guard::read_searchable_text_file(pathbuf.as_path()) {
                 Ok(content) => content,
                 Err(e) => {
                     if debug_mode {
-                        println!(
-                            "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
-                            resolved_path,
-                            e,
-                            metadata.len()
-                        );
+                        println!("DEBUG: Skipping filename-matched file {pathbuf:?}: {e:?}");
                     }
                     continue;
                 }
@@ -936,6 +896,15 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         250, // Average tokens per result estimate
     );
 
+    // The scoring pool (how many early-ranked files actually get full AST parsing + BM25
+    // ranking) must not be driven solely by the display limit (--max-results): BM25 statistics
+    // (IDF, avg doc length) are computed over whatever ends up in this pool, so a smaller
+    // max_results shrinking the pool can change the relative order of results, not just how
+    // many are shown. Give the pool a generous, max_results-independent floor so relevance
+    // ordering stays stable as --max-results is increased.
+    const MIN_SCORING_POOL_FILES: usize = 300;
+    let scoring_pool_files = estimated_files_needed.max(MIN_SCORING_POOL_FILES);
+
     let mut files_processed = 0;
     let mut batch_number = 0;
     let mut should_continue = true;
@@ -943,9 +912,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Track total files available for accurate skipped file count
     let total_ranked_files = ranked_files.len();
 
-    // Use dynamic batch size: min of BATCH_SIZE and estimated_files_needed
-    // This prevents processing way more files than needed when limits are strict
-    let effective_batch_size = BATCH_SIZE.min(estimated_files_needed);
+    // Use dynamic batch size: min of BATCH_SIZE and the scoring pool size (not
+    // estimated_files_needed directly). Sizing the batch off estimated_files_needed made the
+    // batch granularity itself track --max-results, so different --max-results values walked
+    // the same globally-ranked file list in differently-sized steps and could overshoot the
+    // results-count safety valve below at different file counts - silently rescoring a
+    // different candidate set (and thus a different relevance order) per --max-results.
+    // Basing it on scoring_pool_files keeps the step size max_results-independent.
+    let effective_batch_size = BATCH_SIZE.min(scoring_pool_files);
     if debug_mode {
         println!(
             "DEBUG: Using batch size {} (BATCH_SIZE={}, estimated_files_needed={})",
@@ -1221,23 +1195,28 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         final_results.append(&mut batch_results);
 
         // Check if we have enough results or files processed
-        if files_processed >= estimated_files_needed {
+        if files_processed >= scoring_pool_files {
             if debug_mode {
                 println!(
-                    "DEBUG: Stopping batch processing - processed {files_processed} files (estimated need: {estimated_files_needed})"
+                    "DEBUG: Stopping batch processing - processed {files_processed} files (scoring pool: {scoring_pool_files})"
                 );
             }
             should_continue = false;
         }
 
-        // Also check if we already have way more results than needed
-        // Use a more conservative multiplier aligned with our 1.5x buffer strategy
+        // Also check if we already have way more results than needed.
+        // This results-count buffer must scale with scoring_pool_files (files), not directly
+        // with max_results, or it reintroduces max_results-dependent reordering: the same
+        // "~2.5 results per file" estimate used to size the pool is applied here, so this
+        // valve trips around the same file count regardless of --max-results. It still grows
+        // for very large --max-results requests via the max_res*2.0 term.
         if let Some(max_res) = max_results {
-            let buffered_max_results = (*max_res as f64 * 2.0).ceil() as usize; // 2x buffer for safety
+            let buffered_max_results = ((scoring_pool_files as f64 * 2.5).ceil() as usize)
+                .max((*max_res as f64 * 2.0).ceil() as usize); // 2x buffer for safety
             if final_results.len() > buffered_max_results {
                 if debug_mode {
                     println!(
-                        "DEBUG: Stopping batch processing - have {} results (2x buffered max_results: {})",
+                        "DEBUG: Stopping batch processing - have {} results (buffered max_results: {})",
                         final_results.len(),
                         buffered_max_results
                     );
@@ -1356,64 +1335,49 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             format_duration(remaining_time)
         );
     }
-    // Rank results (skip if exact flag is set or all AST terms are exact like quoted queries)
+    // Rank results. Note: the exact flag (and ast_all_exact for quoted queries) only controls
+    // how terms are matched against content/filenames (no stemming/fuzzy expansion) - it does
+    // not imply relevance ranking should be skipped. Previously exact searches fell back to
+    // alphabetical path order instead of BM25 relevance, so we rank exact matches too.
     let rr_start = Instant::now();
-    let skip_ranking = *exact || ast_all_exact;
     if debug_mode {
-        if skip_ranking {
-            println!("DEBUG: Skipping result ranking due to exact flag being set");
-        } else {
-            println!("DEBUG: Starting result ranking...");
-        }
+        println!("DEBUG: Starting result ranking...");
     }
 
-    if !skip_ranking {
-        // Only perform ranking if exact flag is not set
-        rank_search_results(&mut final_results, queries, reranker, *question);
+    rank_search_results(&mut final_results, queries, reranker, *question);
 
-        // Apply deterministic secondary sort to ensure consistent ordering for results with equal scores
-        // This prevents non-deterministic behavior when results have the same ranking score
-        final_results.sort_by(|a, b| {
-            // First sort by score (if available), then by file path, then by line number
-            match (a.rank, b.rank) {
-                (Some(rank_a), Some(rank_b)) => {
-                    // If ranks are different, use rank ordering
-                    match rank_a.cmp(&rank_b) {
-                        std::cmp::Ordering::Equal => {
-                            // If ranks are equal, use deterministic secondary sort
-                            (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0))
-                        }
-                        other => other,
+    // Apply deterministic secondary sort to ensure consistent ordering for results with equal scores
+    // This prevents non-deterministic behavior when results have the same ranking score
+    final_results.sort_by(|a, b| {
+        // First sort by score (if available), then by file path, then by line number
+        match (a.rank, b.rank) {
+            (Some(rank_a), Some(rank_b)) => {
+                // If ranks are different, use rank ordering
+                match rank_a.cmp(&rank_b) {
+                    std::cmp::Ordering::Equal => {
+                        // If ranks are equal, use deterministic secondary sort
+                        (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0))
                     }
-                }
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => {
-                    // If no ranks, sort by file path and line number
-                    (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0))
+                    other => other,
                 }
             }
-        });
-    } else {
-        // For exact searches, always apply deterministic sort
-        final_results.sort_by(|a, b| (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0)));
-    }
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => {
+                // If no ranks, sort by file path and line number
+                (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0))
+            }
+        }
+    });
 
     let rr_duration = rr_start.elapsed();
     timings.result_ranking = Some(rr_duration);
 
     if debug_mode {
-        if *exact {
-            println!(
-                "DEBUG: Result ranking skipped in {}",
-                format_duration(rr_duration)
-            );
-        } else {
-            println!(
-                "DEBUG: Result ranking completed in {}",
-                format_duration(rr_duration)
-            );
-        }
+        println!(
+            "DEBUG: Result ranking completed in {}",
+            format_duration(rr_duration)
+        );
     }
 
     // We'll move the caching step AFTER limiting results
@@ -1527,6 +1491,23 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         );
     }
 
+    // Always deduplicate contained blocks (overlapping results from the same
+    // file where one fully contains the other). This is NOT merging — it
+    // removes true duplicates regardless of --no-merge.
+    let limited = if !limited.results.is_empty() {
+        use probe_code::search::block_merging::deduplicate_contained_blocks;
+        let deduped = deduplicate_contained_blocks(limited.results);
+        LimitedSearchResults {
+            results: deduped,
+            skipped_files: limited.skipped_files,
+            limits_applied: limited.limits_applied,
+            cached_blocks_skipped: limited.cached_blocks_skipped,
+            files_skipped_early_termination: limited.files_skipped_early_termination,
+        }
+    } else {
+        limited
+    };
+
     // Optional block merging - AFTER initial caching
     let bm_start = Instant::now();
     if debug_mode && !limited.results.is_empty() && !*no_merge {
@@ -1593,6 +1574,26 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         limited
     };
+
+    // Restore relevance order for display. deduplicate_contained_blocks (always applied above)
+    // and merge_ranked_blocks (applied unless --no-merge) both group blocks by file path via a
+    // BTreeMap to do their per-file work, and neither re-sorts the flattened output afterward -
+    // BTreeMap iteration is alphabetical by file path, so the final list would otherwise come
+    // back ordered alphabetically among the (correctly rank-selected) top max_results results
+    // instead of by relevance. Since which files land in that already-limited set changes with
+    // --max-results, the apparent position of any given result would drift with --max-results
+    // even though the underlying ranking never changed. Re-apply the same rank-based order (with
+    // the same deterministic tie-break) used right after ranking, above.
+    let mut final_results = final_results;
+    final_results.results.sort_by(|a, b| match (a.rank, b.rank) {
+        (Some(rank_a), Some(rank_b)) => match rank_a.cmp(&rank_b) {
+            std::cmp::Ordering::Equal => (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0)),
+            other => other,
+        },
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => (&a.file, a.lines.0).cmp(&(&b.file, b.lines.0)),
+    });
 
     // Print the session ID to the console if it was generated or provided
     if let Some(session_id) = effective_session {
@@ -1688,7 +1689,13 @@ pub fn search_with_structured_patterns(
                 pattern_strings.len()
             );
         }
-        Some(SimdPatternMatcher::with_patterns(pattern_strings.clone()))
+        Some(SimdPatternMatcher::new(
+            pattern_strings.clone(),
+            SimdPatternConfig {
+                case_insensitive: true,
+                ..SimdPatternConfig::default()
+            },
+        ))
     } else {
         if debug_mode {
             println!("DEBUG: Using RipgrepSearcher for complex patterns");
@@ -1871,61 +1878,14 @@ fn search_file_with_simd(
     let mut term_map = HashMap::new();
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    // Define a reasonable maximum file size (e.g., 1MB)
-    const MAX_FILE_SIZE: u64 = 1024 * 1024;
-
-    // Check file metadata and resolve symlinks before reading
-    let resolved_path = match std::fs::canonicalize(file_path) {
-        Ok(path) => path,
-        Err(e) => {
-            if debug_mode {
-                println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
-            }
-            return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
-        }
-    };
-
-    // Get file metadata to check size and file type
-    let metadata = match std::fs::metadata(&resolved_path) {
-        Ok(meta) => meta,
-        Err(e) => {
-            if debug_mode {
-                println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
-            }
-            return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
-        }
-    };
-
-    // Check if the file is too large
-    if metadata.len() > MAX_FILE_SIZE {
-        if debug_mode {
-            println!(
-                "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
-                resolved_path,
-                metadata.len(),
-                MAX_FILE_SIZE
-            );
-        }
-        return Err(anyhow::anyhow!(
-            "File too large: {} bytes (limit: {} bytes)",
-            metadata.len(),
-            MAX_FILE_SIZE
-        ));
-    }
-
-    // Read the file content with proper error handling
-    let content = match std::fs::read_to_string(&resolved_path) {
+    // Read the file content with shared text-search safety checks.
+    let content = match file_guard::read_searchable_text_file(file_path) {
         Ok(content) => content,
         Err(e) => {
             if debug_mode {
-                println!(
-                    "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
-                    resolved_path,
-                    e,
-                    metadata.len()
-                );
+                println!("DEBUG: Skipping unreadable/search-denied file {file_path:?}: {e:?}");
             }
-            return Err(anyhow::anyhow!("Failed to read file: {}", e));
+            return Err(e);
         }
     };
 
@@ -1978,6 +1938,9 @@ fn normalize_language_alias(lang: &str) -> &str {
         "rb" => "ruby",
         "cs" => "csharp",
         "sh" => "bash",
+        "sol" => "solidity",
+        "cr" => "crystal",
+        "hs" | "lhs" => "haskell",
         _ => lang, // Return the original language if no alias is found
     }
 }

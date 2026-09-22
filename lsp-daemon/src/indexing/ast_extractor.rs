@@ -699,6 +699,11 @@ impl AstSymbolExtractor {
             crate::language_detector::Language::Cpp => Ok(tree_sitter_cpp::LANGUAGE.into()),
             crate::language_detector::Language::Bash => Ok(tree_sitter_bash::LANGUAGE.into()),
             crate::language_detector::Language::Qml => Ok(tree_sitter_qmljs::LANGUAGE.into()),
+            crate::language_detector::Language::Solidity => {
+                Ok(tree_sitter_solidity::LANGUAGE.into())
+            }
+            crate::language_detector::Language::Crystal => Ok(tree_sitter_crystal::LANGUAGE.into()),
+            crate::language_detector::Language::Haskell => Ok(tree_sitter_haskell::LANGUAGE.into()),
             _ => Err(anyhow::anyhow!("Unsupported language: {:?}", language)),
         }
     }
@@ -851,6 +856,42 @@ impl AstSymbolExtractor {
                 "function_declaration" | "method_definition" => (SymbolKind::Function, true),
                 _ => (SymbolKind::Function, false),
             },
+            crate::language_detector::Language::Solidity => match node_kind {
+                "function_definition" | "fallback_receive_definition" => {
+                    (SymbolKind::Function, true)
+                }
+                "constructor_definition" | "modifier_definition" => (SymbolKind::Method, true),
+                "contract_declaration" | "library_declaration" => (SymbolKind::Class, true),
+                "interface_declaration" => (SymbolKind::Interface, true),
+                "struct_declaration" => (SymbolKind::Struct, true),
+                "enum_declaration" => (SymbolKind::Enum, true),
+                "event_definition" | "error_declaration" => (SymbolKind::Type, true),
+                "state_variable_declaration" => (SymbolKind::Variable, true),
+                "user_defined_type_definition" => (SymbolKind::Type, true),
+                _ => (SymbolKind::Function, false),
+            },
+            crate::language_detector::Language::Crystal => match node_kind {
+                "method_def" | "abstract_method_def" | "macro_def" | "fun_def" => {
+                    (SymbolKind::Function, true)
+                }
+                "class_def" => (SymbolKind::Class, true),
+                "module_def" => (SymbolKind::Module, true),
+                "struct_def" => (SymbolKind::Struct, true),
+                "enum_def" => (SymbolKind::Enum, true),
+                "lib_def" => (SymbolKind::Interface, true),
+                "alias" | "annotation_def" | "type_def" | "union_def" => (SymbolKind::Type, true),
+                _ => (SymbolKind::Function, false),
+            },
+            crate::language_detector::Language::Haskell => match node_kind {
+                "function" | "bind" | "signature" | "default_signature" | "foreign_import"
+                | "foreign_export" => (SymbolKind::Function, true),
+                "data_type" | "newtype" | "type_synomym" | "type_family" | "type_instance"
+                | "data_family" | "data_instance" | "kind_signature" => (SymbolKind::Type, true),
+                "class" => (SymbolKind::Class, true),
+                "instance" => (SymbolKind::TraitImpl, true),
+                "pattern_synonym" => (SymbolKind::Constant, true),
+                _ => (SymbolKind::Function, false),
+            },
             _ => {
                 // For other languages, try some common patterns
                 match node_kind {
@@ -959,7 +1000,17 @@ impl AstSymbolExtractor {
             }
         }
 
-        None
+        match node.kind() {
+            "constructor_definition" => Some("constructor".to_string()),
+            "fallback_receive_definition" => node.utf8_text(content).ok().map(|text| {
+                if text.trim_start().starts_with("receive") {
+                    "receive".to_string()
+                } else {
+                    "fallback".to_string()
+                }
+            }),
+            _ => None,
+        }
     }
 }
 

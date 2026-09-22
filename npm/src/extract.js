@@ -5,7 +5,7 @@
 
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { getBinaryPath, buildCliArgs, escapeString } from './utils.js';
+import { getBinaryPath, buildCliArgs, escapeString, getCleanEnv } from './utils.js';
 import { validateCwdPath } from './utils/path-validation.js';
 
 const execAsync = promisify(exec);
@@ -104,7 +104,7 @@ export async function extract(options) {
 	const command = `${binaryPath} extract ${cliArgs.join(' ')}`;
 
 	try {
-		const { stdout, stderr } = await execAsync(command, { cwd });
+		const { stdout, stderr } = await execAsync(command, { cwd, env: getCleanEnv() });
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);
@@ -126,7 +126,8 @@ function extractWithStdin(binaryPath, cliArgs, content, options, cwd) {
 	return new Promise((resolve, reject) => {
 		const childProcess = spawn(binaryPath, ['extract', ...cliArgs], {
 			stdio: ['pipe', 'pipe', 'pipe'],
-			cwd
+			cwd,
+			env: getCleanEnv()
 		});
 
 		let stdout = '';

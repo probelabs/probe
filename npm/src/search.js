@@ -5,7 +5,7 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getBinaryPath, buildCliArgs } from './utils.js';
+import { getBinaryPath, buildCliArgs, getCleanEnv } from './utils.js';
 import { validateCwdPath } from './utils/path-validation.js';
 import { TimeoutError, categorizeError } from './utils/error-types.js';
 
@@ -164,6 +164,7 @@ export async function search(options) {
 		// Execute with execFile (no shell, prevents command injection)
 		const { stdout, stderr } = await execFileAsync(binaryPath, args, {
 			cwd,
+			env: getCleanEnv(),
 			timeout: options.timeout * 1000, // Convert seconds to milliseconds
 			maxBuffer: 50 * 1024 * 1024 // 50MB buffer for large outputs
 		});

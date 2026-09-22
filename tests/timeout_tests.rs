@@ -36,10 +36,8 @@ fn test_search_timeout() {
     // Measure the time it takes to run the search
     let start_time = Instant::now();
 
-    // Run the search command with a very short timeout using cargo run
-    let output = Command::new("cargo")
-        .arg("run")
-        .arg("--")
+    // Run the search command with a very short timeout using the probe test binary
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .arg("search")
         .arg("search_term") // This term appears in every function
         .arg("/")

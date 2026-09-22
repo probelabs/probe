@@ -5,14 +5,23 @@ import {
   extractTool,
   delegateTool,
   analyzeAllTool,
-  symbolsTool,
+  symbolsTool
+} from '../tools/vercel.js';
+import {
   createExecutePlanTool,
-  createCleanupExecutePlanTool,
-  bashTool,
+  createCleanupExecutePlanTool
+} from '../tools/executePlan.js';
+import { bashTool } from '../tools/bash.js';
+import {
   editTool,
   createTool,
   multiEditTool,
-  DEFAULT_SYSTEM_MESSAGE,
+  editSchema,
+  createSchema,
+  multiEditSchema
+} from '../tools/edit.js';
+import { DEFAULT_SYSTEM_MESSAGE } from '../tools/system-message.js';
+import {
   searchSchema,
   querySchema,
   extractSchema,
@@ -21,9 +30,6 @@ import {
   executePlanSchema,
   cleanupExecutePlanSchema,
   bashSchema,
-  editSchema,
-  createSchema,
-  multiEditSchema,
   listFilesSchema,
   searchFilesSchema,
   readImageSchema,
@@ -31,7 +37,7 @@ import {
   symbolsSchema,
   listSkillsSchema,
   useSkillSchema
-} from '../index.js';
+} from '../tools/common.js';
 
 // Create configured tool instances
 export function createTools(configOptions) {

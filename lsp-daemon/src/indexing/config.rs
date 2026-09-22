@@ -1403,6 +1403,9 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
         Language::Cpp,
         Language::Bash,
         Language::Qml,
+        Language::Solidity,
+        Language::Crystal,
+        Language::Haskell,
     ] {
         let lang_str = format!("{language:?}").to_uppercase();
         let mut config = LanguageIndexConfig::default();
@@ -1508,6 +1511,20 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
                         features.set_language_feature("extract_bindings".to_string(), true);
                         features.set_language_feature("extract_signals".to_string(), true);
                     }
+                    Language::Solidity => {
+                        features.set_language_feature("extract_contracts".to_string(), true);
+                        features.set_language_feature("extract_events".to_string(), true);
+                        features.set_language_feature("extract_modifiers".to_string(), true);
+                    }
+                    Language::Crystal => {
+                        features.set_language_feature("extract_macros".to_string(), true);
+                        features.set_language_feature("extract_modules".to_string(), true);
+                    }
+                    Language::Haskell => {
+                        features.set_language_feature("extract_typeclasses".to_string(), true);
+                        features.set_language_feature("extract_instances".to_string(), true);
+                        features.set_language_feature("extract_signatures".to_string(), true);
+                    }
                     _ => {}
                 }
 
@@ -1552,6 +1569,9 @@ fn default_extensions_for_language(language: Language) -> Vec<String> {
         ],
         Language::Bash => vec!["sh".to_string(), "bash".to_string()],
         Language::Qml => vec!["qml".to_string()],
+        Language::Solidity => vec!["sol".to_string()],
+        Language::Crystal => vec!["cr".to_string()],
+        Language::Haskell => vec!["hs".to_string(), "lhs".to_string()],
         _ => vec![],
     }
 }
@@ -1571,6 +1591,9 @@ impl FromStr for Language {
             "cpp" | "c++" => Ok(Language::Cpp),
             "bash" | "sh" => Ok(Language::Bash),
             "qml" => Ok(Language::Qml),
+            "solidity" | "sol" => Ok(Language::Solidity),
+            "crystal" | "cr" => Ok(Language::Crystal),
+            "haskell" | "hs" | "lhs" => Ok(Language::Haskell),
             _ => Err(anyhow!("Unknown language: {}", s)),
         }
     }

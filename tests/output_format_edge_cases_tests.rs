@@ -187,10 +187,8 @@ fn test_json_output_with_long_lines() {
     create_edge_case_test_files(&temp_dir);
 
     // Run the CLI with JSON output format, searching for "longLine"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "longLine", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -258,10 +256,8 @@ fn test_json_output_with_many_lines() {
     create_edge_case_test_files(&temp_dir);
 
     // Run the CLI with JSON output format, searching for "Line"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "Line", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -314,10 +310,8 @@ fn test_json_output_with_nested_structures() {
     create_edge_case_test_files(&temp_dir);
 
     // Run the CLI with JSON output format, searching for "nestedStructure"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "nestedStructure", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -387,10 +381,8 @@ fn test_json_output_with_mixed_encodings() {
     create_edge_case_test_files(&temp_dir);
 
     // Run the CLI with JSON output format, searching for "mixedEncodings"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "mixedEncodings", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -460,10 +452,8 @@ fn test_xml_output_with_long_lines() {
     create_edge_case_test_files(&temp_dir);
 
     // Run the CLI with XML output format, searching for "longLine"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "longLine", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -538,10 +528,8 @@ fn test_xml_output_with_nested_structures() {
     create_edge_case_test_files(&temp_dir);
 
     // Run the CLI with XML output format, searching for "nestedStructure"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "nestedStructure", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -618,10 +606,8 @@ fn test_xml_output_with_mixed_encodings() {
     create_edge_case_test_files(&temp_dir);
 
     // Run the CLI with XML output format, searching for "mixedEncodings"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "mixedEncodings", // Pattern to search for
             temp_dir.path().to_str().unwrap(),

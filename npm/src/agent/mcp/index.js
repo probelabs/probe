@@ -20,6 +20,7 @@ export {
   MCPXmlBridge,
   mcpToolToDescription
 } from './xmlBridge.js';
+export { BuiltInMCPServer } from './built-in-server.js';
 
 // Import for default export
 import { MCPClientManager, createMCPManager, createTransport } from './client.js';
@@ -34,6 +35,7 @@ import {
   MCPXmlBridge,
   mcpToolToDescription
 } from './xmlBridge.js';
+import { BuiltInMCPServer } from './built-in-server.js';
 
 // Default export for convenience
 export default {
@@ -51,5 +53,8 @@ export default {
 
   // MCP Bridge
   MCPXmlBridge,
-  mcpToolToDescription
+  mcpToolToDescription,
+
+  // Built-in server
+  BuiltInMCPServer
 };

@@ -16,6 +16,18 @@ impl CLanguage {
     }
 }
 
+fn signature_before_body(node: &Node, source: &[u8]) -> Option<String> {
+    let body = node.child_by_field_name("body")?;
+    let signature = &source[node.start_byte()..body.start_byte()];
+    Some(
+        String::from_utf8_lossy(signature)
+            .trim()
+            .trim_end_matches('{')
+            .trim()
+            .to_string(),
+    )
+}
+
 impl LanguageImpl for CLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         tree_sitter_c::LANGUAGE.into()
@@ -58,5 +70,12 @@ impl LanguageImpl for CLanguage {
         }
 
         false
+    }
+
+    fn get_symbol_signature(&self, node: &Node, source: &[u8]) -> Option<String> {
+        match node.kind() {
+            "function_definition" => signature_before_body(node, source),
+            _ => None,
+        }
     }
 }

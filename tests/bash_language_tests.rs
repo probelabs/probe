@@ -101,6 +101,9 @@ fn test_bash_query_support() {
         max_results: Some(20),
         format: "terminal",
         no_gitignore: true,
+        with_context: false,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("Bash query should run");
@@ -128,6 +131,9 @@ fn test_bash_query_auto_detect_support() {
         max_results: Some(20),
         format: "terminal",
         no_gitignore: true,
+        with_context: false,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("Bash query should auto-detect .sh files");
@@ -309,11 +315,16 @@ fn test_extensionless_bash_search_with_language_filter() {
 
 #[test]
 fn test_extensionless_non_shebang_file_unaffected() {
-    // A text file without a shebang must not be treated as bash.
+    // A text file without a shebang must not be treated as bash. Since the
+    // plain-text fallback (#581), such files extract as raw text lines; the
+    // key invariant is that no bash AST symbols are produced.
     let plain = fixture_root().join("src/bin/plain-data");
+    let extracted =
+        extract_symbols(&plain, false).expect("plain-text fallback extraction should succeed");
     assert!(
-        extract_symbols(&plain, false).is_err(),
-        "non-shebang extensionless file must stay unsupported"
+        extracted.symbols.iter().all(|s| s.kind == "text"),
+        "non-shebang extensionless file must not produce bash symbols: {:?}",
+        extracted.symbols
     );
 
     // Nor should it pass a bash language filter (it contains a decoy

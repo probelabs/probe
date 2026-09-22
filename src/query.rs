@@ -1,23 +1,32 @@
-use anyhow::{Context, Result};
-use ast_grep_core::language::TSLanguage;
-use ast_grep_core::{AstGrep, Language};
+use crate::extract::symbols::{
+    is_c_like_extension, is_standard_text_extension, matches_text_extension,
+    recover_c_like_functions,
+};
+use anyhow::Result;
+use ast_grep_core::language::{Language, TSLanguage};
+use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
 use ignore::WalkBuilder;
+use probe_code::file_guard;
 use probe_code::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
-use std::fs;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use tree_sitter::Node;
 
 /// Represents a match found by ast-grep
 pub struct AstMatch {
     pub file_path: PathBuf,
+    pub byte_start: usize,
+    pub byte_end: usize,
     pub line_start: usize,
     pub line_end: usize,
     pub column_start: usize,
     pub column_end: usize,
     pub matched_text: String,
+    pub node_type: String,
 }
 
 /// Options for the ast-grep query
@@ -28,19 +37,25 @@ pub struct QueryOptions<'a> {
     pub ignore: &'a [String],
     pub allow_tests: bool,
     pub max_results: Option<usize>,
+    pub with_context: bool,
     #[allow(dead_code)]
     pub format: &'a str,
     pub no_gitignore: bool,
+    pub strict: bool,
+    pub text_extensions: &'a [String],
 }
 
 /// Languages supported by the `query` command.
 ///
-/// Most languages come from ast-grep's bundled `SupportLang`; QML is wired in
-/// through our own tree-sitter-qmljs grammar because ast-grep has no QML
-/// support (Bash *is* bundled in ast-grep, so it uses the builtin).
-#[derive(Clone)]
+/// Most languages come from ast-grep's bundled `SupportLang`; Solidity,
+/// Crystal, and QML are wired in through our own tree-sitter grammars because
+/// ast-grep has no support for them (Bash *is* bundled in ast-grep, so it
+/// uses the builtin).
+#[derive(Clone, Copy)]
 enum ProbeQueryLang {
     Builtin(SupportLang),
+    Solidity,
+    Crystal,
     Qml,
 }
 
@@ -48,6 +63,8 @@ impl Language for ProbeQueryLang {
     fn get_ts_language(&self) -> TSLanguage {
         match self {
             ProbeQueryLang::Builtin(lang) => lang.get_ts_language(),
+            ProbeQueryLang::Solidity => tree_sitter_solidity::LANGUAGE.into(),
+            ProbeQueryLang::Crystal => tree_sitter_crystal::LANGUAGE.into(),
             ProbeQueryLang::Qml => tree_sitter_qmljs::LANGUAGE.into(),
         }
     }
@@ -67,6 +84,9 @@ fn get_language(lang: &str) -> Option<ProbeQueryLang> {
         "ruby" => Some(ProbeQueryLang::Builtin(SupportLang::Ruby)),
         "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
         "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
+        "haskell" | "hs" | "lhs" => Some(ProbeQueryLang::Builtin(SupportLang::Haskell)),
+        "solidity" | "sol" => Some(ProbeQueryLang::Solidity),
+        "crystal" | "cr" => Some(ProbeQueryLang::Crystal),
         "csharp" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
         "bash" | "sh" => Some(ProbeQueryLang::Builtin(SupportLang::Bash)),
         "qml" => Some(ProbeQueryLang::Qml),
@@ -88,6 +108,9 @@ fn get_file_extension(lang: &str) -> Vec<&str> {
         "ruby" => vec![".rb"],
         "php" => vec![".php"],
         "swift" => vec![".swift"],
+        "haskell" | "hs" | "lhs" => vec![".hs", ".lhs"],
+        "solidity" | "sol" => vec![".sol"],
+        "crystal" | "cr" => vec![".cr"],
         "csharp" => vec![".cs"],
         "bash" | "sh" => vec![".sh", ".bash"],
         "qml" => vec![".qml"],
@@ -125,9 +148,13 @@ fn should_ignore_file(file_path: &Path, options: &QueryOptions) -> bool {
 fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>> {
     // Get the file extension
     let file_ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let user_text_extension = matches_text_extension(file_ext, options.text_extensions);
+    let automatic_text_extension =
+        options.language.is_none() && !options.strict && is_standard_text_extension(file_ext);
+    let force_plain_text = user_text_extension || automatic_text_extension;
 
     // If language is provided, check if the file has the correct extension
-    if let Some(language) = options.language {
+    if let Some(language) = options.language.filter(|_| !force_plain_text) {
         let extensions = get_file_extension(language);
         let has_matching_ext = extensions
             .iter()
@@ -138,9 +165,13 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
         }
     }
 
-    // Read the file content
-    let content = fs::read_to_string(file_path)
-        .with_context(|| format!("Failed to read file: {}", file_path.display()))?;
+    // Read the file content with the same hard-deny, size, and binary guards
+    // used by regular search.
+    let content = file_guard::read_searchable_text_file(file_path)?;
+
+    if force_plain_text {
+        return Ok(query_plain_text_file(file_path, &content, options.pattern));
+    }
 
     // Get the language for ast-grep
     let lang = if let Some(language) = options.language {
@@ -165,6 +196,9 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
             "rb" => Some(ProbeQueryLang::Builtin(SupportLang::Ruby)),
             "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
             "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
+            "hs" | "lhs" => Some(ProbeQueryLang::Builtin(SupportLang::Haskell)),
+            "sol" => Some(ProbeQueryLang::Solidity),
+            "cr" => Some(ProbeQueryLang::Crystal),
             "cs" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
             "sh" | "bash" => Some(ProbeQueryLang::Builtin(SupportLang::Bash)),
             "qml" => Some(ProbeQueryLang::Qml),
@@ -173,7 +207,13 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
 
         match inferred_lang {
             Some(lang) => lang,
-            None => return Ok(vec![]), // Skip files with unsupported extensions
+            None => {
+                return if options.strict {
+                    Ok(vec![])
+                } else {
+                    Ok(query_plain_text_file(file_path, &content, options.pattern))
+                };
+            }
         }
     };
 
@@ -233,15 +273,322 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
 
         ast_matches.push(AstMatch {
             file_path: file_path.to_path_buf(),
+            byte_start: range.start,
+            byte_end: range.end,
             line_start,
             line_end,
             column_start,
             column_end,
             matched_text: node.text().to_string(),
+            node_type: "match".to_string(),
         });
     }
 
+    supplement_c_like_function_matches(
+        &mut ast_matches,
+        &content,
+        file_path,
+        options.pattern,
+        options.language,
+        file_ext,
+    );
+    supplement_rust_function_matches(
+        &mut ast_matches,
+        &content,
+        file_path,
+        options.pattern,
+        options.language,
+        file_ext,
+    );
+    supplement_python_function_matches(
+        &mut ast_matches,
+        &content,
+        file_path,
+        options.pattern,
+        options.language,
+        file_ext,
+    );
+
     Ok(ast_matches)
+}
+
+fn query_plain_text_file(file_path: &Path, content: &str, pattern: &str) -> Vec<AstMatch> {
+    let mut matches = Vec::new();
+    let mut byte_offset = 0usize;
+
+    for (idx, line) in content.lines().enumerate() {
+        if let Some(match_start) = line.find(pattern) {
+            let line_start = idx + 1;
+            let byte_start = byte_offset + match_start;
+            let byte_end = byte_offset + line.len();
+            matches.push(AstMatch {
+                file_path: file_path.to_path_buf(),
+                byte_start,
+                byte_end,
+                line_start,
+                line_end: line_start,
+                column_start: match_start + 1,
+                column_end: line.len() + 1,
+                matched_text: line.to_string(),
+                node_type: "text".to_string(),
+            });
+        }
+        byte_offset += line.len() + 1;
+    }
+
+    matches
+}
+
+fn supplement_c_like_function_matches(
+    ast_matches: &mut Vec<AstMatch>,
+    content: &str,
+    file_path: &Path,
+    pattern: &str,
+    language: Option<&str>,
+    file_ext: &str,
+) {
+    if !should_recover_c_like_functions(pattern, language, file_ext) {
+        return;
+    }
+
+    let required_prefix = c_like_required_prefix(pattern);
+    let mut existing_lines: HashSet<usize> = ast_matches.iter().map(|m| m.line_start).collect();
+
+    for recovered in recover_c_like_functions(content.as_bytes()) {
+        if existing_lines.contains(&recovered.line) {
+            continue;
+        }
+        if let Some(prefix) = &required_prefix {
+            if !normalize_c_like_signature(&recovered.signature).starts_with(prefix) {
+                continue;
+            }
+        }
+
+        let matched_text = content[recovered.byte_start..recovered.byte_end].to_string();
+        let (line_start, column_start) = byte_to_line_column(content, recovered.byte_start);
+        let (line_end, column_end) = byte_to_line_column(content, recovered.byte_end);
+
+        existing_lines.insert(line_start);
+        ast_matches.push(AstMatch {
+            file_path: file_path.to_path_buf(),
+            byte_start: recovered.byte_start,
+            byte_end: recovered.byte_end,
+            line_start,
+            line_end,
+            column_start,
+            column_end,
+            matched_text,
+            node_type: "match".to_string(),
+        });
+    }
+
+    ast_matches.sort_by_key(|m| (m.file_path.clone(), m.byte_start));
+}
+
+fn supplement_rust_function_matches(
+    ast_matches: &mut Vec<AstMatch>,
+    content: &str,
+    file_path: &Path,
+    pattern: &str,
+    language: Option<&str>,
+    file_ext: &str,
+) {
+    if !should_recover_rust_functions(pattern, language, file_ext) {
+        return;
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .is_err()
+    {
+        return;
+    }
+
+    let Some(tree) = parser.parse(content, None) else {
+        return;
+    };
+
+    let mut existing_lines: HashSet<usize> = ast_matches.iter().map(|m| m.line_start).collect();
+    collect_rust_function_matches(
+        tree.root_node(),
+        content,
+        file_path,
+        ast_matches,
+        &mut existing_lines,
+    );
+    ast_matches.sort_by_key(|m| (m.file_path.clone(), m.byte_start));
+}
+
+fn should_recover_rust_functions(pattern: &str, language: Option<&str>, file_ext: &str) -> bool {
+    let is_rust = language
+        .map(|lang| matches!(lang.to_lowercase().as_str(), "rust" | "rs"))
+        .unwrap_or(file_ext == "rs");
+    if !is_rust {
+        return false;
+    }
+
+    let normalized = pattern.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized == "fn $NAME($$$PARAMS) $$$BODY"
+}
+
+fn supplement_python_function_matches(
+    ast_matches: &mut Vec<AstMatch>,
+    content: &str,
+    file_path: &Path,
+    pattern: &str,
+    language: Option<&str>,
+    file_ext: &str,
+) {
+    if !should_recover_python_functions(pattern, language, file_ext) {
+        return;
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .is_err()
+    {
+        return;
+    }
+
+    let Some(tree) = parser.parse(content, None) else {
+        return;
+    };
+
+    let mut existing_lines: HashSet<usize> = ast_matches.iter().map(|m| m.line_start).collect();
+    collect_function_node_matches(
+        tree.root_node(),
+        "function_definition",
+        content,
+        file_path,
+        ast_matches,
+        &mut existing_lines,
+    );
+    ast_matches.sort_by_key(|m| (m.file_path.clone(), m.byte_start));
+}
+
+fn should_recover_python_functions(pattern: &str, language: Option<&str>, file_ext: &str) -> bool {
+    let is_python = language
+        .map(|lang| matches!(lang.to_lowercase().as_str(), "python" | "py"))
+        .unwrap_or(file_ext == "py");
+    if !is_python {
+        return false;
+    }
+
+    let normalized = pattern.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized == "def $NAME($$$PARAMS): $$$BODY"
+}
+
+fn collect_rust_function_matches(
+    node: Node,
+    content: &str,
+    file_path: &Path,
+    matches: &mut Vec<AstMatch>,
+    existing_lines: &mut HashSet<usize>,
+) {
+    collect_function_node_matches(
+        node,
+        "function_item",
+        content,
+        file_path,
+        matches,
+        existing_lines,
+    );
+}
+
+fn collect_function_node_matches(
+    node: Node,
+    target_kind: &str,
+    content: &str,
+    file_path: &Path,
+    matches: &mut Vec<AstMatch>,
+    existing_lines: &mut HashSet<usize>,
+) {
+    if node.kind() == target_kind {
+        let line_start = node.start_position().row + 1;
+        if existing_lines.insert(line_start) {
+            let byte_start = node.start_byte();
+            let byte_end = node.end_byte();
+            matches.push(AstMatch {
+                file_path: file_path.to_path_buf(),
+                byte_start,
+                byte_end,
+                line_start,
+                line_end: node.end_position().row + 1,
+                column_start: node.start_position().column + 1,
+                column_end: node.end_position().column + 1,
+                matched_text: content[byte_start..byte_end].to_string(),
+                node_type: "match".to_string(),
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_function_node_matches(
+            child,
+            target_kind,
+            content,
+            file_path,
+            matches,
+            existing_lines,
+        );
+    }
+}
+
+fn should_recover_c_like_functions(pattern: &str, language: Option<&str>, file_ext: &str) -> bool {
+    if !language
+        .map(is_c_like_language)
+        .unwrap_or_else(|| is_c_like_extension(file_ext))
+    {
+        return false;
+    }
+
+    let trimmed = pattern.trim();
+    trimmed == "function_definition"
+        || (trimmed.contains("$NAME")
+            && trimmed.contains("$$$BODY")
+            && trimmed.contains('(')
+            && trimmed.contains(')')
+            && trimmed.contains('{')
+            && trimmed.contains('}'))
+}
+
+fn is_c_like_language(language: &str) -> bool {
+    matches!(
+        language.to_lowercase().as_str(),
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx"
+    )
+}
+
+fn c_like_required_prefix(pattern: &str) -> Option<String> {
+    let prefix = pattern.split("$NAME").next()?.trim();
+    if prefix.is_empty() || prefix.contains('$') {
+        return None;
+    }
+    Some(normalize_c_like_signature(prefix))
+}
+
+fn normalize_c_like_signature(signature: &str) -> String {
+    signature.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn byte_to_line_column(content: &str, byte: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut column = 1;
+    for (i, ch) in content.char_indices() {
+        if i >= byte {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
 }
 
 pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
@@ -308,6 +655,7 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
         .filter(|entry| !should_ignore_file(entry.path(), options))
+        .filter(|entry| !file_guard::is_hard_denied_path(entry.path()))
         .map(|entry| entry.path().to_path_buf())
         .collect();
 
@@ -351,7 +699,12 @@ fn escape_xml(s: &str) -> String {
 }
 
 /// Format and print the query results
-pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Result<()> {
+pub fn format_and_print_query_results(
+    matches: &[AstMatch],
+    format: &str,
+    pattern: &str,
+    with_context: bool,
+) -> Result<()> {
     match format {
         "color" | "terminal" => {
             for m in matches {
@@ -404,30 +757,58 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             }
         }
         "json" => {
+            use std::collections::HashMap;
+
             // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for query JSON output:
             // Process all matched text in batch to leverage content deduplication
             use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+            use probe_code::semantic_context::ParsedSourceContext;
+
             let matched_texts: Vec<&str> =
                 matches.iter().map(|m| m.matched_text.as_str()).collect();
             let total_tokens = sum_tokens_with_deduplication(&matched_texts);
+
+            let mut parsed_files: HashMap<std::path::PathBuf, Option<ParsedSourceContext>> =
+                HashMap::new();
 
             // Create standardized results
             let json_matches_standardized: Vec<_> = matches
                 .iter()
                 .map(|m| {
-                    serde_json::json!({
+                    let mut result = serde_json::json!({
                         "file": m.file_path.to_string_lossy(),
                         "lines": [m.line_start, m.line_end],
-                        "node_type": "match",
+                        "node_type": m.node_type,
                         "content": m.matched_text,
                         "column_start": m.column_start,
                         "column_end": m.column_end
-                    })
+                    });
+
+                    if with_context {
+                        let parsed = parsed_files
+                            .entry(m.file_path.clone())
+                            .or_insert_with(|| ParsedSourceContext::parse(&m.file_path));
+                        if let Some(context) = parsed.as_ref().and_then(|parsed| {
+                            parsed.query_source_context(m.byte_start, m.byte_end, &m.matched_text)
+                        }) {
+                            result["language"] = serde_json::json!(context.language);
+                            result["pattern"] = serde_json::json!({
+                                "source": pattern,
+                                "id": serde_json::Value::Null,
+                            });
+                            result["match"] = serde_json::json!(context.r#match);
+                            if let Some(owner) = context.owner {
+                                result["owner"] = serde_json::json!(owner);
+                            }
+                        }
+                    }
+
+                    result
                 })
                 .collect();
 
             // Create the wrapper object
-            let wrapper = serde_json::json!({
+            let mut wrapper = serde_json::json!({
                 "results": json_matches_standardized,
                 "summary": {
                     "count": matches.len(),
@@ -436,6 +817,9 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                 },
                 "version": probe_code::version::get_version()
             });
+            if with_context {
+                wrapper["schema_version"] = serde_json::json!("probe.query.context.v1");
+            }
 
             println!("{}", serde_json::to_string_pretty(&wrapper)?);
         }
@@ -450,7 +834,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                     escape_xml(&m.file_path.to_string_lossy())
                 );
                 println!("    <lines>{}-{}</lines>", m.line_start, m.line_end);
-                println!("    <node_type>match</node_type>");
+                println!("    <node_type>{}</node_type>", escape_xml(&m.node_type));
                 println!("    <column_start>{}</column_start>", m.column_start);
                 println!("    <column_end>{}</column_end>", m.column_end);
                 println!("    <code><![CDATA[{}]]></code>", m.matched_text.trim());
@@ -461,7 +845,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             println!("  <summary>");
             println!("    <count>{}</count>", matches.len());
             println!(
-                "    <total_bytes>{}",
+                "    <total_bytes>{}</total_bytes>",
                 matches.iter().map(|m| m.matched_text.len()).sum::<usize>()
             );
 
@@ -472,7 +856,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                 matches.iter().map(|m| m.matched_text.as_str()).collect();
             let total_tokens = sum_tokens_with_deduplication(&matched_texts);
 
-            println!("    <total_tokens>{total_tokens}");
+            println!("    <total_tokens>{total_tokens}</total_tokens>");
             println!("  </summary>");
 
             println!(
@@ -484,7 +868,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
         }
         _ => {
             // Default to color format
-            format_and_print_query_results(matches, "color")?;
+            format_and_print_query_results(matches, "color", pattern, with_context)?;
         }
     }
 
@@ -502,6 +886,9 @@ pub fn handle_query(
     max_results: Option<usize>,
     format: &str,
     no_gitignore: bool,
+    with_context: bool,
+    strict: bool,
+    text_extensions: Vec<String>,
 ) -> Result<()> {
     // Print version at the start for text-based formats
     if format != "json" && format != "xml" {
@@ -550,8 +937,11 @@ pub fn handle_query(
         ignore,
         allow_tests,
         max_results,
+        with_context,
         format,
         no_gitignore,
+        strict,
+        text_extensions: &text_extensions,
     };
 
     let matches = perform_query(&options)?;
@@ -562,7 +952,7 @@ pub fn handle_query(
     if matches.is_empty() {
         // For JSON and XML formats, still call format_and_print_query_results
         if format == "json" || format == "xml" {
-            format_and_print_query_results(&matches, format)?;
+            format_and_print_query_results(&matches, format, pattern, with_context)?;
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
@@ -575,7 +965,7 @@ pub fn handle_query(
             println!();
         }
 
-        format_and_print_query_results(&matches, format)?;
+        format_and_print_query_results(&matches, format, pattern, with_context)?;
 
         // Skip summary for JSON and XML formats
         if format != "json" && format != "xml" {
@@ -601,6 +991,7 @@ pub fn handle_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -627,6 +1018,9 @@ increment() {
             max_results: Some(10),
             format: "json",
             no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
         };
 
         let matches = perform_query(&options).expect("Bash query should run");
@@ -666,6 +1060,9 @@ Item {
             max_results: Some(10),
             format: "json",
             no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
         };
 
         let matches = perform_query(&options).expect("QML query should run");
@@ -686,17 +1083,23 @@ Item {
         )
         .unwrap();
 
+        // NOTE: since #581, `.sh` is a standard text extension, so querying
+        // shell scripts without an explicit `--language` falls back to plain
+        // text matching; ast-grep Bash requires `language: Some("bash")`.
         let sh_options = QueryOptions {
             path: temp_dir.path(),
             pattern: "build_all() {\n  $$$\n}",
-            language: None,
+            language: Some("bash"),
             ignore: &[],
             allow_tests: true,
             max_results: Some(10),
             format: "json",
             no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
         };
-        let matches = perform_query(&sh_options).expect("Bash auto-detect query should run");
+        let matches = perform_query(&sh_options).expect("Bash query should run");
         assert!(
             matches.iter().any(|m| m.file_path == sh_file),
             "matches: {:?}",
@@ -712,6 +1115,9 @@ Item {
             max_results: Some(10),
             format: "json",
             no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
         };
         let matches = perform_query(&qml_options).expect("QML auto-detect query should run");
         assert!(
@@ -719,5 +1125,79 @@ Item {
             "matches: {:?}",
             matches.iter().map(|m| &m.file_path).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_solidity_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("Counter.sol");
+        fs::write(
+            &file,
+            r#"
+contract Counter {
+    uint256 private _value;
+
+    function increment() public {
+        _value += 1;
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "function $NAME() public { $$$BODY }",
+            language: Some("solidity"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            with_context: false,
+            format: "json",
+            no_gitignore: true,
+            strict: false,
+            text_extensions: &[],
+        };
+
+        let matches = perform_query(&options).expect("Solidity query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("function increment()"));
+    }
+
+    #[test]
+    fn test_crystal_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("counter.cr");
+        fs::write(
+            &file,
+            r#"
+class Counter
+  def increment : Int32
+    1
+  end
+end
+"#,
+        )
+        .unwrap();
+
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "def increment : Int32",
+            language: Some("crystal"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            with_context: false,
+            format: "json",
+            no_gitignore: true,
+            strict: false,
+            text_extensions: &[],
+        };
+
+        let matches = perform_query(&options).expect("Crystal query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("def increment"));
     }
 }

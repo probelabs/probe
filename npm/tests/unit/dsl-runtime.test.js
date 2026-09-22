@@ -1437,6 +1437,83 @@ describe('Issue #444 fixes', () => {
   });
 });
 
+describe('async fork error propagation', () => {
+  test('catches a delayed rejection and runs catch/finally in order', async () => {
+    let llmCalls = 0;
+    const asyncRuntime = createDSLRuntime({
+      toolImplementations: {},
+      llmCall: () => {
+        llmCalls += 1;
+        return Promise.resolve('LOCAL_ASYNC_OK');
+      },
+    });
+
+    const result = await asyncRuntime.execute(`
+      const ledger = [];
+      try {
+        ledger.push("try");
+        const asyncResult = LLM("local fixture", "local data");
+        ledger.push("async:" + asyncResult);
+        throw { message: "ASYNC_TOOL_REJECTED" };
+      } catch (error) {
+        ledger.push("catch:" + error.message);
+      } finally {
+        ledger.push("finally");
+      }
+      ledger.push("after");
+      return ledger;
+    `);
+
+    expect(llmCalls).toBe(1);
+    expect(result.status).toBe('success');
+    expect(result.result).toEqual([
+      'try',
+      'async:LOCAL_ASYNC_OK',
+      'catch:ASYNC_TOOL_REJECTED',
+      'finally',
+      'after',
+    ]);
+  });
+
+  test('returns a host error for an uncaught delayed rejection after finally', async () => {
+    let llmCalls = 0;
+    const outputBuffer = { items: [] };
+    const asyncRuntime = createDSLRuntime({
+      toolImplementations: {},
+      llmCall: () => {
+        llmCalls += 1;
+        return Promise.resolve('LOCAL_ASYNC_OK');
+      },
+      outputBuffer,
+    });
+
+    const result = await asyncRuntime.execute(`
+      const ledger = [];
+      try {
+        ledger.push("try");
+        const asyncResult = LLM("local fixture", "local data");
+        ledger.push("async:" + asyncResult);
+        throw { message: "ASYNC_TOOL_REJECTED" };
+      } finally {
+        ledger.push("finally");
+        output(JSON.stringify(ledger));
+      }
+      ledger.push("after");
+      return ledger;
+    `);
+
+    expect(llmCalls).toBe(1);
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('ASYNC_TOOL_REJECTED');
+    expect(result.result).toBeUndefined();
+    expect(outputBuffer.items).toEqual([JSON.stringify([
+      'try',
+      'async:LOCAL_ASYNC_OK',
+      'finally',
+    ])]);
+  });
+});
+
 // Test extractRawOutputBlocks helper function
 import { extractRawOutputBlocks, RAW_OUTPUT_START, RAW_OUTPUT_END } from '../../src/tools/executePlan.js';
 

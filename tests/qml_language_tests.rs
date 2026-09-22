@@ -115,6 +115,9 @@ fn test_qml_query_support() {
         max_results: Some(20),
         format: "terminal",
         no_gitignore: true,
+        with_context: false,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("QML query should run");
@@ -144,6 +147,9 @@ fn test_qml_query_auto_detect_support() {
         max_results: Some(20),
         format: "terminal",
         no_gitignore: true,
+        with_context: false,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("QML query should auto-detect .qml files");

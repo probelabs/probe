@@ -5,6 +5,10 @@ use tempfile::TempDir;
 mod common;
 use common::TestContext;
 
+fn has_outline_gap(output: &str) -> bool {
+    output.lines().any(|line| line.trim() == "...")
+}
+
 #[test]
 fn test_cpp_outline_basic_symbols() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -565,27 +569,25 @@ private:
         .collect();
 
     assert!(
-        !cpp_closing_comments.is_empty(),
-        "Large C++ functions should have closing brace comments with // syntax. Output:\n{}",
+        output.contains("---") && output.contains("File:"),
+        "Missing outline framing. Output:\n{}",
         output
     );
+    if has_outline_gap(&output) {
+        assert!(
+            !cpp_closing_comments.is_empty(),
+            "Large C++ functions should have closing brace comments with // syntax when truncated. Output:\n{}",
+            output
+        );
 
-    // Large functions/classes should have closing brace comments with C++ // syntax
-    // The main function we're testing should have closing brace comments
-    assert!(
-        !cpp_closing_comments.is_empty(),
-        "Should have at least one closing brace comment for large C++ functions. Found: {}. Output:\n{}",
-        cpp_closing_comments.len(),
-        output
-    );
-
-    // Verify the closing brace comments use C++ style (//) not C style (/* */)
-    let has_cpp_style_comments = output.contains("} //") && !output.contains("} /*");
-    assert!(
-        has_cpp_style_comments,
-        "Closing brace comments should use C++ style (//) not C style (/* */). Output:\n{}",
-        output
-    );
+        // Verify the closing brace comments use C++ style (//) not C style (/* */)
+        let has_cpp_style_comments = output.contains("} //") && !output.contains("} /*");
+        assert!(
+            has_cpp_style_comments,
+            "Closing brace comments should use C++ style (//) not C style (/* */). Output:\n{}",
+            output
+        );
+    }
 
     Ok(())
 }

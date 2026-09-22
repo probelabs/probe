@@ -1,8 +1,19 @@
 use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use tempfile::TempDir;
 
 use probe_code::search::{perform_probe, SearchOptions};
+use serial_test::serial;
+
+static QUOTED_NEGATIVE_QUERY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn quoted_negative_query_guard() -> std::sync::MutexGuard<'static, ()> {
+    QUOTED_NEGATIVE_QUERY_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("quoted negative query test lock poisoned")
+}
 
 /// Create test files with different content for testing queries
 fn create_test_files(temp_dir: &Path) {
@@ -40,7 +51,10 @@ fn another_function() {
 
 /// Test a query with a quoted term and a negative keyword: "keywordAlpha" -keywordGamma
 #[test]
+#[serial(quoted_negative_query)]
 fn test_quoted_term_with_negative_keyword() {
+    let _guard = quoted_negative_query_guard();
+
     // Create a temporary directory for testing
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -139,7 +153,10 @@ fn test_quoted_term_with_negative_keyword() {
 
 /// Test a query with a negative quoted term: -"keywordGamma"
 #[test]
+#[serial(quoted_negative_query)]
 fn test_negative_quoted_term() {
+    let _guard = quoted_negative_query_guard();
+
     // Create a temporary directory for testing
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();

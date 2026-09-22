@@ -840,22 +840,45 @@ impl Parser {
                     println!("DEBUG: Ident => {first}");
                 }
                 if let Some(Token::Colon) = self.peek() {
-                    // We have "field:"
                     self.next(); // consume colon
-                                 // Next could be ident or quoted
-                    match self.peek() {
-                        Some(Token::Ident(ident2)) => {
-                            let val2 = ident2.clone();
-                            self.next();
-                            Ok(make_term(vec![val2], Some(first), false, false, false))
+
+                    if let Some(Token::Colon) = self.peek() {
+                        self.next(); // consume the second colon in a namespace separator
+                        let Some(Token::Ident(next_ident)) = self.next() else {
+                            return Ok(make_term(vec![first], None, false, false, false));
+                        };
+
+                        let mut qualified = format!("{first}::{next_ident}");
+                        while matches!(self.peek(), Some(Token::Colon))
+                            && matches!(self.tokens.get(self.pos + 1), Some(Token::Colon))
+                        {
+                            self.next(); // consume first colon
+                            self.next(); // consume second colon
+                            let Some(Token::Ident(part)) = self.next() else {
+                                break;
+                            };
+                            qualified.push_str("::");
+                            qualified.push_str(&part);
                         }
-                        Some(Token::QuotedString(qs)) => {
-                            let qval = qs.clone();
-                            self.next();
-                            Ok(make_term(vec![qval], Some(first), false, false, true))
+
+                        Ok(make_term(vec![qualified], None, false, false, false))
+                    } else {
+                        // We have "field:".
+                        // Next could be ident or quoted.
+                        match self.peek() {
+                            Some(Token::Ident(ident2)) => {
+                                let val2 = ident2.clone();
+                                self.next();
+                                Ok(make_term(vec![val2], Some(first), false, false, false))
+                            }
+                            Some(Token::QuotedString(qs)) => {
+                                let qval = qs.clone();
+                                self.next();
+                                Ok(make_term(vec![qval], Some(first), false, false, true))
+                            }
+                            // If nothing or other token => empty term
+                            _ => Ok(make_term(vec![], Some(first), false, false, false)),
                         }
-                        // If nothing or other token => empty term
-                        _ => Ok(make_term(vec![], Some(first), false, false, false)),
                     }
                 } else {
                     // Just a plain ident

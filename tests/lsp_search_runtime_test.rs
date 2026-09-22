@@ -158,7 +158,7 @@ fn test_search_command_with_lsp_integration() -> Result<()> {
     }
 
     // Run the actual search command with LSP
-    let output = Command::new("./target/release/probe")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args(["search", "main", "src", "--lsp", "--max-results", "1"])
         .env("RUST_BACKTRACE", "1") // Capture panic backtrace if it occurs
         .output()?;

@@ -4,7 +4,7 @@
  */
 
 import { spawn } from 'child_process';
-import { getBinaryPath, escapeString } from './utils.js';
+import { getBinaryPath, escapeString, getCleanEnv } from './utils.js';
 import { validateCwdPath } from './utils/path-validation.js';
 
 /**
@@ -47,7 +47,8 @@ export async function symbols(options) {
 	return new Promise((resolve, reject) => {
 		const childProcess = spawn(binaryPath, args, {
 			stdio: ['pipe', 'pipe', 'pipe'],
-			cwd
+			cwd,
+			env: getCleanEnv()
 		});
 
 		let stdout = '';

@@ -188,15 +188,14 @@ fn test_xml_schema_validation_basic() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--format",
             "xml",
+            "--exclude-filenames",
         ])
         .output()
         .expect("Failed to execute command");
@@ -246,15 +245,14 @@ fn test_xml_schema_validation_special_characters() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format, searching for special characters
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "special", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--format",
             "xml",
+            "--exclude-filenames",
         ])
         .output()
         .expect("Failed to execute command");
@@ -339,15 +337,14 @@ fn test_xml_schema_validation_empty_results() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format, searching for a term that doesn't exist
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
-            "nonexistentterm", // Term that doesn't exist in any file
+            "zzzzqqqqxxxx", // Term that doesn't exist in any file
             temp_dir.path().to_str().unwrap(),
             "--format",
             "xml",
+            "--exclude-filenames",
         ])
         .output()
         .expect("Failed to execute command");
@@ -406,10 +403,8 @@ fn test_xml_schema_validation_multiple_terms() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format, searching for multiple terms
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "term process", // Multiple terms to search for
             temp_dir.path().to_str().unwrap(),

@@ -6,6 +6,9 @@ import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
+const mockGenerateText = jest.fn();
+const mockCreateLanguageModel = jest.fn();
+
 // Mock the 'ai' package for tool wrapper
 jest.mock('ai', () => ({
   tool: jest.fn((config) => ({
@@ -13,7 +16,8 @@ jest.mock('ai', () => ({
     description: config.description,
     inputSchema: config.inputSchema,
     execute: config.execute
-  }))
+  })),
+  generateText: mockGenerateText
 }));
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,6 +30,7 @@ const mockDelegate = jest.fn();
 const searchModulePath = resolve(__dirname, '../../src/search.js');
 const extractModulePath = resolve(__dirname, '../../src/extract.js');
 const delegateModulePath = resolve(__dirname, '../../src/delegate.js');
+const providerModulePath = resolve(__dirname, '../../src/utils/provider.js');
 
 jest.unstable_mockModule(searchModulePath, () => ({
   search: mockSearch
@@ -39,11 +44,132 @@ jest.unstable_mockModule(delegateModulePath, () => ({
   delegate: mockDelegate
 }));
 
+jest.unstable_mockModule(providerModulePath, () => ({
+  createLanguageModel: mockCreateLanguageModel
+}));
+
 const { searchTool } = await import('../../src/tools/vercel.js');
 
 describe('searchDelegate behavior', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  test('records dedup failure details in span attributes instead of masking them', async () => {
+    mockCreateLanguageModel.mockResolvedValue({});
+    mockGenerateText.mockRejectedValue(new Error('503 model overloaded'));
+    mockDelegate.mockResolvedValue(
+      JSON.stringify({
+        targets: ['a.js#foo']
+      })
+    );
+
+    const spans = [];
+    const tracer = {
+      withSpan: jest.fn(async (name, fn, attrs, onResult) => {
+        const result = await fn();
+        const span = {
+          attrs: {},
+          setAttributes(values) {
+            this.attrs = { ...this.attrs, ...values };
+          }
+        };
+        if (onResult) onResult(span, result);
+        spans.push({ name, attrs, resultAttrs: span.attrs });
+        return result;
+      })
+    };
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      provider: 'google',
+      model: 'gemini-3-flash-preview',
+      tracer
+    });
+
+    await tool.execute({ query: 'graphql complexity', path: '.' });
+    await tool.execute({ query: 'graphql complexity depth', path: '.' });
+
+    const dedupSpan = spans.find(s => s.name === 'search.delegate.dedup');
+    expect(dedupSpan).toBeDefined();
+    expect(dedupSpan.attrs).toEqual(
+      expect.objectContaining({
+        'dedup.provider': 'google',
+        'dedup.model': 'gemini-3-flash-preview',
+        'dedup.model_available': 'true'
+      })
+    );
+    expect(dedupSpan.resultAttrs).toEqual(
+      expect.objectContaining({
+        'dedup.action': 'allow',
+        'dedup.reason': 'dedup check failed'
+      })
+    );
+    expect(dedupSpan.resultAttrs['dedup.error']).toEqual(expect.any(String));
+    expect(dedupSpan.resultAttrs['dedup.error']).not.toBe('');
+  });
+
+  test('scopes delegate semantic dedup to the same path', async () => {
+    mockCreateLanguageModel.mockResolvedValue(null);
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      targets: ['crypto/fips.js#validateFips']
+    }));
+
+    const spans = [];
+    const tracer = {
+      withSpan: jest.fn(async (name, fn, attrs, onResult) => {
+        const result = await fn();
+        const span = {
+          attrs: {},
+          setAttributes(values) {
+            this.attrs = { ...this.attrs, ...values };
+          }
+        };
+        if (onResult) onResult(span, result);
+        spans.push({ name, attrs, resultAttrs: span.attrs });
+        return result;
+      })
+    };
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      provider: 'google',
+      model: 'gemini-3-flash-preview',
+      tracer
+    });
+
+    const first = await tool.execute({ query: 'FIPS validation', path: '/workspace/repo-a' });
+    const second = await tool.execute({ query: 'FIPS validation', path: '/workspace/repo-b' });
+
+    expect(first).not.toContain('DELEGATE BLOCKED');
+    expect(second).not.toContain('DELEGATE BLOCKED');
+    expect(mockDelegate).toHaveBeenCalledTimes(2);
+    expect(spans.filter(s => s.name === 'search.delegate.dedup')).toHaveLength(0);
+
+    const third = await tool.execute({ query: 'FIPS validation', path: '/workspace/repo-a' });
+
+    expect(third).not.toContain('DELEGATE BLOCKED');
+    expect(mockDelegate).toHaveBeenCalledTimes(3);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+
+    const dedupSpan = spans.find(s => s.name === 'search.delegate.dedup');
+    expect(dedupSpan).toBeDefined();
+    expect(dedupSpan.attrs).toEqual(
+      expect.objectContaining({
+        'dedup.previous_count': '1',
+        'dedup.previous_queries': 'FIPS validation'
+      })
+    );
+    expect(dedupSpan.resultAttrs).toEqual(
+      expect.objectContaining({
+        'dedup.action': 'allow',
+        'dedup.reason': 'dedup model unavailable'
+      })
+    );
   });
 
   test('delegates search and returns structured JSON when searchDelegate=true', async () => {

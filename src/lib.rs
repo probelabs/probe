@@ -41,6 +41,9 @@
 //!     dry_run: false,
 //!     session: None,
 //!     timeout: 30,
+//!     question: None,
+//!     no_gitignore: false,
+//!     lsp: false,
 //! };
 //!
 //! let results = perform_probe(&options).unwrap();
@@ -83,11 +86,15 @@
 //! let options = QueryOptions {
 //!     path: Path::new("."),
 //!     pattern: "fn $NAME($$$PARAMS) { $$$BODY }",
-//!     language: Some("rust".to_string()),
+//!     language: Some("rust"),
 //!     ignore: &[],
 //!     allow_tests: false,
 //!     max_results: None,
-//!     format: "text".to_string(),
+//!     with_context: false,
+//!     format: "text",
+//!     no_gitignore: false,
+//!     strict: false,
+//!     text_extensions: &[],
 //! };
 //!
 //! let matches = perform_query(&options).unwrap();
@@ -100,6 +107,7 @@ extern crate self as probe_code;
 pub mod bert_reranker;
 pub mod config;
 pub mod extract;
+pub mod file_guard;
 pub mod language;
 pub mod lsp_integration;
 pub mod models;
@@ -108,6 +116,7 @@ pub mod path_safety;
 pub mod query;
 pub mod ranking;
 pub mod search;
+pub mod semantic_context;
 pub mod simd_ranking;
 pub mod simd_test;
 pub mod utils;

@@ -37,22 +37,45 @@ async fn test_would_have_caught_runtime_panic() {
 }
 
 /// This test shows how the fix works - using Handle::try_current()
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn test_fix_using_handle_try_current() {
-    // This is how our fix works
-    let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        // We're in a runtime, use block_in_place
-        tokio::task::block_in_place(|| {
-            handle.block_on(async { "This works correctly in async context" })
-        })
-    } else {
-        // Not in a runtime, safe to create one
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(async { "This works in sync context" })
-    };
+    use probe_code::models::SearchResult;
 
-    assert_eq!(result, "This works correctly in async context");
+    let mut results = vec![SearchResult {
+        file: "test.txt".to_string(),
+        lines: (1, 1),
+        code: "plain text result".to_string(),
+        node_type: "text".to_string(),
+        score: Some(1.0),
+        tfidf_score: None,
+        bm25_score: Some(1.0),
+        new_score: None,
+        rank: Some(1),
+        matched_keywords: Some(vec!["text".to_string()]),
+        parent_file_id: None,
+        file_match_rank: Some(1),
+        file_unique_terms: Some(1),
+        file_total_matches: Some(1),
+        block_unique_terms: Some(1),
+        block_total_matches: Some(1),
+        combined_score_rank: Some(1),
+        bm25_rank: Some(1),
+        tfidf_rank: None,
+        hybrid2_rank: None,
+        lsp_info: None,
+        block_id: None,
+        matched_by_filename: Some(false),
+        tokenized_content: None,
+        symbol_signature: None,
+        parent_context: None,
+        matched_lines: None,
+    }];
+
+    let result = probe_code::search::lsp_enrichment::enrich_results_with_lsp(&mut results, false);
+    assert!(
+        result.is_ok(),
+        "LSP enrichment should work when called directly inside a current-thread runtime"
+    );
 }
 
 /// Test that demonstrates the issue in a realistic scenario

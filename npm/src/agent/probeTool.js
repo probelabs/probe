@@ -1,5 +1,5 @@
 // Simplified tool wrapper for probe agent (based on examples/chat/probeTool.js)
-import { listFilesByLevel } from '../index.js';
+import { listFilesByLevel } from '../utils/file-lister.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';

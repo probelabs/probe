@@ -5756,10 +5756,13 @@ impl LspManager {
             "php" => Ok(Language::Php),
             "ruby" | "rb" => Ok(Language::Ruby),
             "swift" => Ok(Language::Swift),
+            "solidity" | "sol" => Ok(Language::Solidity),
+            "crystal" | "cr" => Ok(Language::Crystal),
             "kotlin" | "kt" => Ok(Language::Kotlin),
             "scala" => Ok(Language::Scala),
             "bash" | "sh" => Ok(Language::Bash),
             "qml" => Ok(Language::Qml),
+            "haskell" | "hs" | "lhs" => Ok(Language::Haskell),
             _ => Err(anyhow::anyhow!("Unsupported language: {}", lang_str)),
         }
     }

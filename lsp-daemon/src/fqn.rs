@@ -46,6 +46,9 @@ pub fn get_fqn_from_ast_with_content(
         "cpp" | "cc" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
         "sh" | "bash" => Some(tree_sitter_bash::LANGUAGE),
         "qml" => Some(tree_sitter_qmljs::LANGUAGE),
+        "sol" => Some(tree_sitter_solidity::LANGUAGE),
+        "cr" => Some(tree_sitter_crystal::LANGUAGE),
+        "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE),
         _ => None,
     };
 
@@ -105,6 +108,9 @@ fn language_to_extension(language: &str) -> Option<&'static str> {
         "cpp" | "c++" | "cxx" => Some("cpp"),
         "bash" | "sh" => Some("sh"),
         "qml" => Some("qml"),
+        "solidity" | "sol" => Some("sol"),
+        "crystal" | "cr" => Some("cr"),
+        "haskell" | "hs" | "lhs" => Some("hs"),
         _ => None,
     }
 }
@@ -364,7 +370,9 @@ fn find_declaration_in_descendants<'a>(
 fn get_language_separator(extension: &str) -> &str {
     match extension {
         "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sh" | "bash" | "qml" => ".",
+        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs"
+        | "sh" | "bash" | "qml" => ".",
+        "cr" => "::",
         "php" => "\\",
         _ => "::", // Default to Rust-style for unknown languages
     }
@@ -387,6 +395,26 @@ fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
         "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
         "sh" | "bash" => matches!(kind, "function_definition"),
         "qml" => matches!(kind, "function_declaration" | "method_definition"),
+        "sol" => matches!(
+            kind,
+            "function_definition"
+                | "constructor_definition"
+                | "modifier_definition"
+                | "fallback_receive_definition"
+        ),
+        "cr" => matches!(
+            kind,
+            "method_def" | "abstract_method_def" | "macro_def" | "fun_def"
+        ),
+        "hs" | "lhs" => matches!(
+            kind,
+            "function"
+                | "bind"
+                | "signature"
+                | "default_signature"
+                | "foreign_import"
+                | "foreign_export"
+        ),
         _ => kind.contains("function") || kind.contains("method"),
     }
 }
@@ -413,6 +441,28 @@ fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
         "sh" | "bash" => false,
         // QML ui_object_definition is the enclosing component scope
         "qml" => matches!(kind, "ui_object_definition"),
+        "sol" => matches!(
+            kind,
+            "contract_declaration"
+                | "interface_declaration"
+                | "library_declaration"
+                | "struct_declaration"
+                | "enum_declaration"
+        ),
+        "cr" => matches!(
+            kind,
+            "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
+        ),
+        "hs" | "lhs" => matches!(
+            kind,
+            "class"
+                | "instance"
+                | "data_type"
+                | "newtype"
+                | "type_synomym"
+                | "type_family"
+                | "data_family"
+        ),
         _ => {
             // Fallback for unknown languages: try to detect common node types
             kind.contains("class") || kind.contains("struct") || kind.contains("namespace")

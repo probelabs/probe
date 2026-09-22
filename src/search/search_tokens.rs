@@ -511,8 +511,11 @@ pub fn batch_count_tokens_with_deduplication(content_blocks: &[&str]) -> Vec<usi
 ///
 /// # Example Usage
 /// ```rust
+/// use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+///
 /// let blocks = vec!["fn main() {}", "fn test() {}", "fn main() {}"]; // Note duplicate
-/// let total = sum_tokens_with_deduplication(&blocks.iter().collect::<Vec<_>>());
+/// let total = sum_tokens_with_deduplication(&blocks);
+/// assert!(total > 0);
 /// ```
 pub fn sum_tokens_with_deduplication(content_blocks: &[&str]) -> usize {
     batch_count_tokens_with_deduplication(content_blocks)

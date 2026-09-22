@@ -5,7 +5,7 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getBinaryPath, buildCliArgs, escapeString } from './utils.js';
+import { getBinaryPath, buildCliArgs, escapeString, getCleanEnv } from './utils.js';
 import { validateCwdPath } from './utils/path-validation.js';
 
 const execAsync = promisify(exec);
@@ -18,6 +18,7 @@ const QUERY_FLAG_MAP = {
 	language: '--language',
 	ignore: '--ignore',
 	allowTests: '--allow-tests',
+	withContext: '--with-context',
 	maxResults: '--max-results',
 	format: '--format'
 };
@@ -32,6 +33,7 @@ const QUERY_FLAG_MAP = {
  * @param {string} [options.language] - Programming language to search in
  * @param {string[]} [options.ignore] - Patterns to ignore
  * @param {boolean} [options.allowTests] - Include test files
+ * @param {boolean} [options.withContext] - Include owning source-block context in JSON output
  * @param {number} [options.maxResults] - Maximum number of results
  * @param {string} [options.format] - Output format ('markdown', 'plain', 'json', 'color')
  * @param {Object} [options.binaryOptions] - Options for getting the binary
@@ -82,7 +84,7 @@ export async function query(options) {
 	const command = `${binaryPath} query ${cliArgs.join(' ')}`;
 
 	try {
-		const { stdout, stderr } = await execAsync(command, { cwd });
+		const { stdout, stderr } = await execAsync(command, { cwd, env: getCleanEnv() });
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);

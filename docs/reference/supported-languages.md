@@ -18,6 +18,9 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | Ruby | `.rb` | ✅ | ✅ |
 | PHP | `.php` | ✅ | ✅ |
 | Swift | `.swift` | ✅ | ✅ |
+| Solidity | `.sol` | ✅ | ✅ |
+| Crystal | `.cr` | ✅ | ✅ |
+| Haskell | `.hs`, `.lhs` | ✅ | ✅ |
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
 | YAML | `.yaml`, `.yml` | ✅ | ✅ |
@@ -129,6 +132,29 @@ Go also implements special handling for nested struct types.
 - **Namespace Awareness**: Understands C# namespaces
 - **Attribute Handling**: Properly handles C# attributes
 - **Test Detection**: Identifies test classes and methods using NUnit, MSTest, or xUnit conventions
+
+### Solidity
+
+- **Contract Extraction**: Extracts contracts, interfaces, and libraries
+- **Function Extraction**: Extracts functions, constructors, fallback/receive functions, and modifiers
+- **Type Extraction**: Extracts structs, enums, user-defined value types, events, and custom errors
+- **Comment Handling**: Associates NatSpec and regular comments with Solidity code blocks
+- **Test Detection**: Identifies Foundry-style `.t.sol` files, `*Test.sol` contracts, `setUp`, `test*`, and `invariant_*` functions
+
+### Crystal
+
+- **Module/Class Extraction**: Extracts modules, classes, structs, enums, libraries, and unions
+- **Method Extraction**: Extracts instance methods, class methods, abstract methods, macros, and C binding functions
+- **Type Extraction**: Extracts aliases, type definitions, and annotation definitions
+- **Comment Handling**: Uses Crystal's `#` comments when formatting contextual output
+- **Test Detection**: Identifies Crystal spec files such as `*_spec.cr` and common spec DSL blocks
+
+### Haskell
+
+- **Type/Class Extraction**: Extracts data types, newtypes, type synonyms, type families, type classes, and instances
+- **Function Extraction**: Extracts top-level functions, bindings, signatures, foreign imports/exports, and pattern synonyms
+- **Comment Handling**: Uses Haskell's `--` comments when formatting contextual output
+- **Test Detection**: Identifies common Hspec/Tasty/QuickCheck files such as `*Spec.hs`, `*Test.hs`, and literate `.lhs` variants
 
 ### Markdown
 

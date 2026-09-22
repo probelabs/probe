@@ -7,6 +7,7 @@
 
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 
@@ -30,12 +31,27 @@ export function createProviderInstance(config) {
 				...(config.baseURL && { baseURL: config.baseURL })
 			});
 
-		case 'openai':
-			return createOpenAI({
+		case 'openai': {
+			if (config.baseURL) {
+				// Non-OpenAI endpoints (Fireworks, etc.) — use openai-compatible provider
+				// which correctly handles reasoning_content in streaming deltas
+				const provider = createOpenAICompatible({
+					name: 'openai-compatible',
+					baseURL: config.baseURL,
+					apiKey: config.apiKey,
+				});
+				return provider;
+			}
+			const openai = createOpenAI({
 				compatibility: 'strict',
 				apiKey: config.apiKey,
-				...(config.baseURL && { baseURL: config.baseURL })
 			});
+			const chatProvider = (modelId, settings) => openai.chat(modelId, settings);
+			chatProvider.chat = openai.chat.bind(openai);
+			chatProvider.responses = openai.responses.bind(openai);
+			chatProvider.languageModel = openai.languageModel.bind(openai);
+			return chatProvider;
+		}
 
 		case 'google':
 			return createGoogleGenerativeAI({
@@ -85,8 +101,31 @@ export function resolveApiKey(providerName) {
 }
 
 /**
+ * Resolve base URL for a provider from environment variables.
+ * Mirrors the env-var resolution in ProbeAgent and FallbackManager so that
+ * lightweight LLM calls (dedup, etc.) route through the same API gateway.
+ * @param {string} providerName
+ * @returns {string|undefined}
+ */
+export function resolveBaseUrl(providerName) {
+	const llmBaseUrl = process.env.LLM_BASE_URL;
+	switch (providerName) {
+		case 'anthropic':
+			return process.env.ANTHROPIC_API_URL || process.env.ANTHROPIC_BASE_URL || llmBaseUrl;
+		case 'openai':
+			return process.env.OPENAI_API_URL || process.env.OPENAI_BASE_URL || llmBaseUrl;
+		case 'google':
+			return process.env.GOOGLE_API_URL || llmBaseUrl;
+		case 'bedrock':
+			return process.env.AWS_BEDROCK_BASE_URL || llmBaseUrl;
+		default:
+			return llmBaseUrl;
+	}
+}
+
+/**
  * Create a language model instance from provider name + model name.
- * Resolves API keys from environment automatically.
+ * Resolves API keys and base URLs from environment automatically.
  * Returns null on failure (graceful degradation for optional features).
  * @param {string} providerName - 'anthropic' | 'openai' | 'google' | 'bedrock'
  * @param {string} modelName - Model identifier (e.g., 'gemini-2.0-flash')
@@ -98,7 +137,8 @@ export async function createLanguageModel(providerName, modelName) {
 	if (!resolvedModel) return null;
 	try {
 		const apiKey = resolveApiKey(providerName);
-		const provider = createProviderInstance({ provider: providerName, ...(apiKey ? { apiKey } : {}) });
+		const baseURL = resolveBaseUrl(providerName);
+		const provider = createProviderInstance({ provider: providerName, ...(apiKey ? { apiKey } : {}), ...(baseURL ? { baseURL } : {}) });
 		return provider(resolvedModel);
 	} catch {
 		return null;

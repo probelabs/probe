@@ -4,6 +4,7 @@
 // Import submodules
 pub mod block_handling;
 pub mod common;
+pub mod crystal;
 pub mod factory;
 pub mod language_trait;
 pub mod parser;
@@ -17,6 +18,7 @@ pub mod c;
 pub mod cpp;
 pub mod csharp;
 pub mod go;
+pub mod haskell;
 pub mod html;
 pub mod java;
 pub mod javascript;
@@ -26,6 +28,7 @@ pub mod python;
 pub mod qml;
 pub mod ruby;
 pub mod rust;
+pub mod solidity;
 pub mod swift;
 pub mod typescript;
 pub mod yaml;

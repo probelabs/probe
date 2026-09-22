@@ -65,14 +65,8 @@ fn test_required_terms_with_filename_matching() {
         .unwrap();
 
     // Run the search with the query "api +load +process"
-    let output = std::process::Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "search",
-            "api +load +process",
-            temp_path.to_str().unwrap(),
-        ])
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_probe"))
+        .args(["search", "api +load +process", temp_path.to_str().unwrap()])
         .env("DEBUG", "1")
         .env("RUST_BACKTRACE", "1")
         .output()

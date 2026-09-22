@@ -72,7 +72,13 @@ fn test_multi_keyword_pattern_generation() {
 
     // Check that the term indices are correct
     for (_, indices) in &patterns {
-        // Each pattern should be associated with the correct term index
+        // The combined prefilter pattern intentionally has no term indices
+        // because it cannot identify which specific term matched.
+        if indices.is_empty() {
+            continue;
+        }
+
+        // Each indexed pattern should be associated with the correct term index.
         assert!(
             indices.contains(&0) || indices.contains(&1),
             "Pattern should be associated with term index 0 or 1"
@@ -126,10 +132,13 @@ fn test_excluded_term_pattern_generation() {
     // Generate patterns
     let patterns = create_structured_patterns(&plan);
 
-    // No patterns should be generated for excluded terms
+    // Patterns are generated for excluded terms so search can detect files that
+    // must later be rejected during AST evaluation.
     assert!(
-        patterns.is_empty(),
-        "Should not generate patterns for excluded terms"
+        patterns
+            .iter()
+            .any(|(pattern, indices)| { pattern.contains("excluded") && indices.contains(&0) }),
+        "Should generate an indexed pattern for excluded terms"
     );
 }
 
