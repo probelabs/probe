@@ -110,6 +110,51 @@ describe('Timeout Validation', () => {
 
       expect(agent.requestTimeout).toBe(90000);
     });
+
+    test('should preserve explicit options.requestTimeout zero and mark it explicit', async () => {
+      process.env.REQUEST_TIMEOUT = '60000';
+
+      jest.resetModules();
+      const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+      const agent = new ProbeAgent({
+        apiKey: 'test-key',
+        apiType: 'anthropic',
+        requestTimeout: 0
+      });
+
+      expect(agent.requestTimeout).toBe(0);
+      expect(agent._requestTimeoutExplicit).toBe(true);
+    });
+
+    test('should preserve explicit REQUEST_TIMEOUT environment zero', async () => {
+      process.env.REQUEST_TIMEOUT = '0';
+
+      jest.resetModules();
+      const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+      const agent = new ProbeAgent({
+        apiKey: 'test-key',
+        apiType: 'anthropic'
+      });
+
+      expect(agent.requestTimeout).toBe(0);
+      expect(agent._requestTimeoutExplicit).toBe(true);
+    });
+
+    test('should reject non-exact zero REQUEST_TIMEOUT environment values', async () => {
+      for (const value of ['0.5', '0oops', '00']) {
+        process.env.REQUEST_TIMEOUT = value;
+
+        jest.resetModules();
+        const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+        const agent = new ProbeAgent({
+          apiKey: 'test-key',
+          apiType: 'anthropic'
+        });
+
+        expect(agent.requestTimeout).toBe(120000);
+        expect(agent._requestTimeoutExplicit).toBe(false);
+      }
+    });
   });
 
   describe('MAX_OPERATION_TIMEOUT environment variable', () => {
@@ -190,6 +235,48 @@ describe('Timeout Validation', () => {
       });
 
       expect(agent.maxOperationTimeout).toBe(400000);
+    });
+
+    test('should preserve explicit options.maxOperationTimeout zero', async () => {
+      process.env.MAX_OPERATION_TIMEOUT = '600000';
+
+      jest.resetModules();
+      const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+      const agent = new ProbeAgent({
+        apiKey: 'test-key',
+        apiType: 'anthropic',
+        maxOperationTimeout: 0
+      });
+
+      expect(agent.maxOperationTimeout).toBe(0);
+    });
+
+    test('should preserve explicit MAX_OPERATION_TIMEOUT environment zero', async () => {
+      process.env.MAX_OPERATION_TIMEOUT = '0';
+
+      jest.resetModules();
+      const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+      const agent = new ProbeAgent({
+        apiKey: 'test-key',
+        apiType: 'anthropic'
+      });
+
+      expect(agent.maxOperationTimeout).toBe(0);
+    });
+
+    test('should reject non-exact zero MAX_OPERATION_TIMEOUT environment values', async () => {
+      for (const value of ['0.5', '0oops', '00']) {
+        process.env.MAX_OPERATION_TIMEOUT = value;
+
+        jest.resetModules();
+        const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+        const agent = new ProbeAgent({
+          apiKey: 'test-key',
+          apiType: 'anthropic'
+        });
+
+        expect(agent.maxOperationTimeout).toBe(300000);
+      }
     });
   });
 
