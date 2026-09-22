@@ -43,7 +43,8 @@ function emitGovernedRequestTimeout(agent, profile, session, method, timeoutMs) 
 }
 
 function validateCodexRequestTimeout(value) {
-  return Number.isInteger(value) && value >= CODEX_REQUEST_TIMEOUT_MIN && value <= CODEX_REQUEST_TIMEOUT_MAX
+  return Number.isInteger(value) && (value === 0 ||
+    (value >= CODEX_REQUEST_TIMEOUT_MIN && value <= CODEX_REQUEST_TIMEOUT_MAX))
     ? value : CODEX_REQUEST_TIMEOUT_DEFAULT;
 }
 
@@ -443,14 +444,17 @@ export async function createCodexEngine(options = {}) {
         params
       };
 
-      // Timeout after the configured request duration (10 minutes standalone)
-      const timer = setTimeout(() => {
+      // Keep the protocol startup handshake bounded even when query deadlines
+      // are explicitly disabled. Tool/query requests use no host timer at 0.
+      const effectiveTimeout = method === 'initialize' && requestTimeout === 0
+        ? CODEX_REQUEST_TIMEOUT_DEFAULT : requestTimeout;
+      const timer = effectiveTimeout > 0 ? setTimeout(() => {
         if (pendingRequests.has(id)) {
           pendingRequests.delete(id);
-          emitGovernedRequestTimeout(agent, governedProfile, session, method, requestTimeout);
-          reject(new Error(`Request ${method} timed out after ${requestTimeout}ms`));
+          emitGovernedRequestTimeout(agent, governedProfile, session, method, effectiveTimeout);
+          reject(new Error(`Request ${method} timed out after ${effectiveTimeout}ms`));
         }
-      }, requestTimeout);
+      }, effectiveTimeout) : null;
       pendingRequests.set(id, { resolve, reject, timer });
 
       codexProcess.stdin.write(JSON.stringify(request) + '\n');

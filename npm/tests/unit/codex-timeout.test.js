@@ -26,7 +26,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (request.method === 'tools/call' && !request.params.arguments.prompt.includes('[WAIT]')) {
-    send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }] } });
+    const delay = request.params.arguments.prompt.includes('[DELAY]') ? 1100 : 0;
+    setTimeout(() => send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }] } }), delay);
   }
 });
 `;
@@ -80,12 +81,12 @@ function alive(pid) {
   }
 }
 
-test('Codex request timeout is bounded, diagnostic, and cleans up a hung child', async () => {
+test('Codex positive request timeout rejects a delayed child and cleans it up', async () => {
   await withFakeCodex(async ({ stateFile }) => {
     let engine;
     try {
       engine = await createCodexEngine({ requestTimeout: 1000 });
-      const output = await collect(engine.query('[WAIT]'));
+      const output = await collect(engine.query('[DELAY]'));
       const error = output.find(chunk => chunk.type === 'error')?.error;
       assert.equal(error?.message, 'Request tools/call timed out after 1000ms');
       const state = await readState(stateFile);
@@ -128,6 +129,76 @@ test('governed Codex timeout emits one bounded record before normalized failure'
       await agent.cleanup().catch(() => {});
     }
   });
+});
+
+test('governed Codex explicit zero keeps AbortSignal cancellation and process cleanup without a timeout event', async () => {
+  await withFakeCodex(async ({ root, stateFile }) => {
+    const cwd = realpathSync(root);
+    const profile = isolatedWriterProfile(cwd);
+    const agent = new ProbeAgent({ provider: 'codex', path: cwd, cwd, allowedTools: ['search', 'extract', 'listFiles'],
+      governedCodexProfile: profile, requestTimeout: 0, maxOperationTimeout: 0, disableSkills: true });
+    const timeouts = [];
+    agent.events.on('timeout.request', record => timeouts.push(record));
+    let engine;
+    try {
+      engine = await agent.getEngine();
+      const controller = new AbortController();
+      const outputPromise = collect(engine.query('[WAIT]', { abortSignal: controller.signal }));
+      setTimeout(() => controller.abort(), 50);
+      const output = await outputPromise;
+      const error = output.find(chunk => chunk.type === 'error')?.error;
+      assert.equal(error?.name, 'GovernedAnswerFailure');
+      assert.equal(error?.answerFailureStage, 'provider_engine');
+      assert.equal(error?.providerEngineFailureBoundary, 'query');
+      assert.deepEqual(timeouts, []);
+      // Wait for the agent-owned cleanup barrier before checking the process;
+      // cancellation must settle the governed child, not merely signal it.
+      await agent.cleanup();
+      const state = await readState(stateFile);
+      assert.equal(alive(state.pid), false);
+    } finally {
+      await agent.cleanup().catch(() => {});
+    }
+  });
+});
+
+test('explicit Codex request zero accepts a healthy terminal message after the host activity window', async () => {
+  await withFakeCodex(async ({ root }) => {
+    const originalDateNow = Date.now;
+    let now = 0;
+    Date.now = () => now;
+    const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [],
+      requestTimeout: 0, maxOperationTimeout: 0, disableSkills: true });
+    try {
+      await agent.getEngine();
+      const result = await agent.streamTextWithRetryAndFallback({
+        messages: [{ role: 'user', content: 'healthy terminal response' }]
+      });
+      let firstGeneratorRead = true;
+      Date.now = () => firstGeneratorRead ? (firstGeneratorRead = false, 0) : 180001;
+      assert.deepEqual(await collect(result.textStream), ['ok']);
+    } finally {
+      Date.now = originalDateNow;
+      await agent.cleanup().catch(() => {});
+    }
+  });
+});
+
+test('post-hoc activity guard remains enabled outside explicit Codex zero mode', async () => {
+  const agent = new ProbeAgent({ provider: 'claude-code', requestTimeout: 0, disableSkills: true });
+  const originalDateNow = Date.now;
+  Date.now = () => 0;
+  try {
+    const result = agent._createEngineTextStreamResult((async function* () {
+      yield { type: 'text', content: 'late response' };
+    })(), new AbortController().signal, 0, { timeoutId: null });
+    let firstGeneratorRead = true;
+    Date.now = () => firstGeneratorRead ? (firstGeneratorRead = false, 0) : 180001;
+    await assert.rejects(collect(result.textStream), /Engine stream timeout - no activity/);
+  } finally {
+    Date.now = originalDateNow;
+    await agent.cleanup().catch(() => {});
+  }
 });
 
 test('ProbeAgent forwards a valid REQUEST_TIMEOUT value to Codex and restores the environment', async () => {
@@ -221,9 +292,89 @@ test('invalid direct Codex request timeouts fall back to the 10-minute default',
   });
 });
 
+test('explicit zero leaves Codex query requests without a host timer while the positive 1000ms bound rejects the same 1100ms call', async () => {
+  await withFakeCodex(async () => {
+    let engine;
+    const originalSetTimeout = globalThis.setTimeout;
+    const startupDelays = [];
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      startupDelays.push(delay);
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    try {
+      engine = await createCodexEngine({ requestTimeout: 0 });
+      assert.equal(startupDelays.includes(600000), true);
+
+      startupDelays.length = 0;
+      const output = await collect(engine.query('[DELAY]'));
+      assert.equal(output.find(chunk => chunk.type === 'text')?.content, 'ok');
+      assert.equal(startupDelays.includes(600000), false);
+      assert.equal(startupDelays.includes(0), false);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      await engine?.close().catch(() => {});
+    }
+  });
+});
+
+test('explicit zero still honors AbortSignal cleanup for a hung Codex query', async () => {
+  await withFakeCodex(async ({ stateFile }) => {
+    const controller = new AbortController();
+    let engine;
+    try {
+      engine = await createCodexEngine({ requestTimeout: 0 });
+      const outputPromise = collect(engine.query('[WAIT]', { abortSignal: controller.signal }));
+      setTimeout(() => controller.abort(), 50);
+      const output = await outputPromise;
+      assert.equal(output.find(chunk => chunk.type === 'error')?.error?.message, 'Codex query cancelled');
+      const state = await readState(stateFile);
+      assert.equal(alive(state.pid), false);
+    } finally {
+      await engine?.close().catch(() => {});
+    }
+  });
+});
+
+test('ProbeAgent preserves and forwards explicit zero timeout settings', async () => {
+  await withFakeCodex(async ({ root }) => {
+    const originalRequestTimeout = process.env.REQUEST_TIMEOUT;
+    const originalMaxOperationTimeout = process.env.MAX_OPERATION_TIMEOUT;
+    process.env.REQUEST_TIMEOUT = '1000';
+    process.env.MAX_OPERATION_TIMEOUT = '1000';
+    let agent;
+    let engine;
+    try {
+      agent = new ProbeAgent({
+        provider: 'codex',
+        path: root,
+        cwd: root,
+        allowedTools: [],
+        disableSkills: true,
+        requestTimeout: 0,
+        maxOperationTimeout: 0
+      });
+      assert.equal(agent.requestTimeout, 0);
+      assert.equal(agent.maxOperationTimeout, 0);
+      assert.equal(agent._requestTimeoutExplicit, true);
+      engine = await agent.getEngine();
+      const output = await collect(engine.query('[DELAY]'));
+      assert.equal(output.find(chunk => chunk.type === 'text')?.content, 'ok');
+    } finally {
+      await engine?.close().catch(() => {});
+      await agent?.cleanup().catch(() => {});
+      if (originalRequestTimeout === undefined) delete process.env.REQUEST_TIMEOUT;
+      else process.env.REQUEST_TIMEOUT = originalRequestTimeout;
+      if (originalMaxOperationTimeout === undefined) delete process.env.MAX_OPERATION_TIMEOUT;
+      else process.env.MAX_OPERATION_TIMEOUT = originalMaxOperationTimeout;
+    }
+  });
+});
+
 test('ordinary successful ProbeAgent queries retain reuse until agent cleanup', async () => {
   await withFakeCodex(async ({ root, stateFile }) => {
-    const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [], disableSkills: true, requestTimeout: 1000 });
+    // This reuse test is not the positive 1000ms timeout control; give the
+    // spawned fake process bounded startup headroom under a busy test runner.
+    const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [], disableSkills: true, requestTimeout: 5000 });
     const engine = await agent.getEngine();
     try {
       assert.deepEqual((await collect(engine.query('first'))).find(chunk => chunk.type === 'text')?.content, 'ok');

@@ -366,8 +366,8 @@ export class ProbeAgent {
    * @param {number} [options.fallback.maxTotalAttempts=10] - Maximum total attempts across all providers
    * @param {string} [options.completionPrompt] - Custom prompt to run after completion for validation/review (runs before mermaid/JSON validation)
    * @param {number} [options.maxOutputTokens] - Maximum tokens for tool output before truncation (default: 20000, can also be set via PROBE_MAX_OUTPUT_TOKENS env var)
-   * @param {number} [options.requestTimeout] - Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests.
-   * @param {number} [options.maxOperationTimeout] - Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback.
+   * @param {number} [options.requestTimeout] - Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). `0` disables the per-request deadline; the Codex startup handshake remains bounded.
+   * @param {number} [options.maxOperationTimeout] - Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). `0` disables the overall operation deadline.
    * @param {string|number} [options.thinkingEffort] - Native thinking/reasoning effort level: 'low', 'medium', 'high', or a number (budget tokens). When set, passes provider-specific thinking options to the LLM via providerOptions.
    */
   constructor(options = {}) {
@@ -546,13 +546,17 @@ export class ProbeAgent {
     // Codex keeps its standalone 10-minute default unless this is explicitly configured.
     const optionRequestTimeout = options.requestTimeout;
     const validOptionRequestTimeout = Number.isInteger(optionRequestTimeout) &&
-      optionRequestTimeout >= REQUEST_TIMEOUT_MIN && optionRequestTimeout <= REQUEST_TIMEOUT_MAX;
-    const parsedRequestTimeout = parseInt(process.env.REQUEST_TIMEOUT, 10);
-    const validEnvRequestTimeout = !isNaN(parsedRequestTimeout) &&
-      parsedRequestTimeout >= REQUEST_TIMEOUT_MIN && parsedRequestTimeout <= REQUEST_TIMEOUT_MAX;
+      (optionRequestTimeout === 0 ||
+        (optionRequestTimeout >= REQUEST_TIMEOUT_MIN && optionRequestTimeout <= REQUEST_TIMEOUT_MAX));
+    const requestTimeoutEnv = process.env.REQUEST_TIMEOUT;
+    const explicitEnvRequestTimeoutZero = typeof requestTimeoutEnv === 'string' && requestTimeoutEnv.trim() === '0';
+    const parsedRequestTimeout = parseInt(requestTimeoutEnv, 10);
+    const validEnvRequestTimeout = explicitEnvRequestTimeoutZero || (!isNaN(parsedRequestTimeout) &&
+      parsedRequestTimeout >= REQUEST_TIMEOUT_MIN && parsedRequestTimeout <= REQUEST_TIMEOUT_MAX);
     this._requestTimeoutExplicit = validOptionRequestTimeout || validEnvRequestTimeout;
     this.requestTimeout = validOptionRequestTimeout ? optionRequestTimeout
-      : validEnvRequestTimeout ? parsedRequestTimeout : REQUEST_TIMEOUT_DEFAULT;
+      : explicitEnvRequestTimeoutZero ? 0
+        : validEnvRequestTimeout ? parsedRequestTimeout : REQUEST_TIMEOUT_DEFAULT;
     if (this.debug) {
       console.log(`[DEBUG] Request timeout: ${this.requestTimeout}ms`);
     }
@@ -561,13 +565,16 @@ export class ProbeAgent {
     // This is the absolute maximum time including all retries and fallbacks
     // Validates env var to prevent NaN or unreasonable values
     this.maxOperationTimeout = options.maxOperationTimeout ?? (() => {
-      if (process.env.MAX_OPERATION_TIMEOUT) {
-        const parsed = parseInt(process.env.MAX_OPERATION_TIMEOUT, 10);
-        // Validate: must be positive number between 1s and 2 hours
-        if (isNaN(parsed) || parsed < 1000 || parsed > 7200000) {
+      const operationTimeoutEnv = process.env.MAX_OPERATION_TIMEOUT;
+      const explicitEnvOperationTimeoutZero = typeof operationTimeoutEnv === 'string' && operationTimeoutEnv.trim() === '0';
+      if (operationTimeoutEnv) {
+        const parsed = parseInt(operationTimeoutEnv, 10);
+        // Validate: zero disables the overall deadline; positive values remain 1s to 2h.
+        if (!explicitEnvOperationTimeoutZero &&
+          (isNaN(parsed) || parsed < 1000 || parsed > 7200000)) {
           return 300000; // Default 5 minutes
         }
-        return parsed;
+        return explicitEnvOperationTimeoutZero ? 0 : parsed;
       }
       return 300000;
     })();
@@ -1453,10 +1460,11 @@ export class ProbeAgent {
    * @param {AbortSignal} abortSignal - Signal for aborting the operation
    * @param {number} requestTimeout - Per-request timeout in ms
    * @param {Object} timeoutState - Object with timeoutId property (mutable for cleanup)
+   * @param {boolean} [disableActivityTimeout=false] - Disable the post-hoc host activity check for explicit Codex no-deadline requests
    * @returns {Object} - streamText-compatible result with textStream
    * @private
    */
-  _createEngineTextStreamResult(engineStream, abortSignal, requestTimeout, timeoutState) {
+  _createEngineTextStreamResult(engineStream, abortSignal, requestTimeout, timeoutState, disableActivityTimeout = false) {
     // Activity timeout for engine stream - validates env var against defined bounds
     const activityTimeout = (() => {
       const parsed = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10);
@@ -1484,7 +1492,7 @@ export class ProbeAgent {
           const now = Date.now();
 
           // Check for activity timeout (no data received for too long)
-          if (now - lastActivity > activityTimeout) {
+          if (!disableActivityTimeout && now - lastActivity > activityTimeout) {
             throw new Error(`Engine stream timeout - no activity for ${activityTimeout}ms`);
           }
 
@@ -1558,7 +1566,8 @@ export class ProbeAgent {
     // Get the engine's query result and wrap with timeout handling
     const engineStream = engine.query(prompt, engineOptions);
     return this._createEngineTextStreamResult(
-      engineStream, controller.signal, this.requestTimeout, timeoutState
+      engineStream, controller.signal, this.requestTimeout, timeoutState,
+      this.clientApiProvider === 'codex' && this._requestTimeoutExplicit && this.requestTimeout === 0
     );
   }
 
