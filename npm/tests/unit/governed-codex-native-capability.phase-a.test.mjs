@@ -469,6 +469,41 @@ createInterface({ input: process.stdin }).on('line', async line => {
       msg: { type: 'raw_response_item', item: { type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
         output: [{ type: 'input_text', text: 7 }], internal_chat_message_metadata_passthrough: passthrough } } } });
   }
+  else if (prompt.includes('[TOOL-OUTPUT-STRING]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+      output: 'TOOL_OUTPUT_STRING_SENTINEL', internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-STRING-EMPTY]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+      output: '', internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-STRING-BOUNDARY]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+      output: 'x'.repeat(1048576), internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-STRING-UTF8-BOUNDARY]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+      output: '\u20ac'.repeat(349525) + 'x', internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-STRING-UTF8-OVERFLOW]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+      output: '\u20ac'.repeat(349526), internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-STRING-OVERFLOW]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+      output: 'x'.repeat(1048577), internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-NULL]') || prompt.includes('[TOOL-OUTPUT-NUMBER]') ||
+    prompt.includes('[TOOL-OUTPUT-BOOLEAN]') || prompt.includes('[TOOL-OUTPUT-MISSING]')) {
+    emitCall(0);
+    const item = { type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+      output: prompt.includes('[TOOL-OUTPUT-NULL]') ? null
+        : prompt.includes('[TOOL-OUTPUT-NUMBER]') ? 7
+          : prompt.includes('[TOOL-OUTPUT-BOOLEAN]') ? true : [],
+      internal_chat_message_metadata_passthrough: passthrough };
+    if (prompt.includes('[TOOL-OUTPUT-MISSING]')) delete item.output;
+    raw(item);
+  }
   else if (prompt.includes('[TOOL-OUTPUT-NONARRAY]')) {
     emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: {}, internal_chat_message_metadata_passthrough: passthrough });
   }
@@ -609,6 +644,19 @@ createInterface({ input: process.stdin }).on('line', async line => {
       const serialized = JSON.stringify({ result: valid.result, events: valid.events });
       for (const secret of ['SECRET_ARGUMENT_BODY', 'SECRET_RESULT_BODY', 'raw-secret-id', 'raw-secret-call', 'raw-secret-turn']) assert.equal(serialized.includes(secret), false);
     }
+
+    for (const marker of ['[TOOL-OUTPUT-STRING]', '[TOOL-OUTPUT-STRING-EMPTY]', '[TOOL-OUTPUT-STRING-BOUNDARY]']) {
+      const valid = await run(marker); assert.ifError(valid.error);
+      assert.deepEqual(valid.result.runtimeAttestation.observed.nativeTools,
+        { total: 1, tools: [{ name: 'exec', status: 'completed', count: 1 }] });
+      assert.deepEqual(valid.events, [{ name: 'exec', status: 'completed', count: 1 }]);
+      const serialized = JSON.stringify({ result: valid.result, events: valid.events });
+      assert.equal(serialized.includes('TOOL_OUTPUT_STRING_SENTINEL'), false);
+    }
+    const utf8Boundary = await run('[TOOL-OUTPUT-STRING-UTF8-BOUNDARY]'); assert.ifError(utf8Boundary.error);
+    assert.deepEqual(utf8Boundary.result.runtimeAttestation.observed.nativeTools,
+      { total: 1, tools: [{ name: 'exec', status: 'completed', count: 1 }] });
+    assert.deepEqual(utf8Boundary.events, [{ name: 'exec', status: 'completed', count: 1 }]);
 
     const attempt7 = await run('[ATTEMPT7]'); assert.ifError(attempt7.error);
     assert.deepEqual(attempt7.result.runtimeAttestation.observed.nativeTools,
@@ -836,6 +884,10 @@ createInterface({ input: process.stdin }).on('line', async line => {
       ['[REASONING-SUMMARY-NONEMPTY]', 'reasoning_summary_nonempty'],
       ['[REASONING-ENCRYPTED-TYPE]', 'reasoning_encrypted_content_type'],
       ['[REASONING-ENCRYPTED-LIMIT]', 'reasoning_encrypted_content_limit'],
+      ['[TOOL-OUTPUT-STRING-OVERFLOW]', 'tool_output_text_limit'],
+      ['[TOOL-OUTPUT-STRING-UTF8-OVERFLOW]', 'tool_output_text_limit'],
+      ['[TOOL-OUTPUT-NULL]', 'tool_output_array'], ['[TOOL-OUTPUT-NUMBER]', 'tool_output_array'],
+      ['[TOOL-OUTPUT-BOOLEAN]', 'tool_output_array'], ['[TOOL-OUTPUT-MISSING]', 'shape'],
       ['[TOOL-OUTPUT-NONARRAY]', 'tool_output_array'], ['[TOOL-OUTPUT-OVERFLOW]', 'tool_output_limit'],
       ['[TOOL-OUTPUT-KIND]', 'tool_output_kind'], ['[TOOL-OUTPUT-TEXT-TYPE]', 'tool_output_text_type'],
       ['[TOOL-OUTPUT-TEXT-LIMIT]', 'tool_output_text_limit'],

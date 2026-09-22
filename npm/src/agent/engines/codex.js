@@ -218,13 +218,17 @@ function createGovernedNativeCollector(profile) {
       if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); }
       governedSafeId(item.call_id);
       if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id)) governedRawItemInvalid('call_output_pairing');
-      if (!Array.isArray(item.output)) governedRawItemInvalid('tool_output_array');
-      if (item.output.length > 64) governedRawItemInvalid('tool_output_limit');
-      for (const part of item.output) {
-        governedExactObject(part, ['type', 'text']);
-        if (part.type !== 'input_text') governedRawItemInvalid('tool_output_kind');
-        if (typeof part.text !== 'string') governedRawItemInvalid('tool_output_text_type');
-        if (Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid('tool_output_text_limit');
+      if (typeof item.output === 'string') {
+        if (Buffer.byteLength(item.output, 'utf8') > 1048576) governedRawItemInvalid('tool_output_text_limit');
+      } else {
+        if (!Array.isArray(item.output)) governedRawItemInvalid('tool_output_array');
+        if (item.output.length > 64) governedRawItemInvalid('tool_output_limit');
+        for (const part of item.output) {
+          governedExactObject(part, ['type', 'text']);
+          if (part.type !== 'input_text') governedRawItemInvalid('tool_output_kind');
+          if (typeof part.text !== 'string') governedRawItemInvalid('tool_output_text_type');
+          if (Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid('tool_output_text_limit');
+        }
       }
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
       relevantEventCount++;
