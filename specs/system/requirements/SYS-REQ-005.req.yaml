@@ -1,0 +1,48 @@
+id: SYS-REQ-005
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: the tree_sitter_parser shall always satisfy tree_cached & language_supported
+description: Tree-sitter parsing for Rust/JS/TS/Go/Python/etc; src/language/tree_cache.rs and tree-sitter callers.
+formalization_strategy: fretish
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+parent: STK-REQ-001
+component: tree_sitter_parser
+rationale: ""
+tags:
+    - parser
+variables: []
+traces:
+    verified_by_extra:
+        - tests/tree_sitter_positions.rs
+    implemented_by_extra:
+        - src/language/tree_cache.rs
+        - src/language/mod.rs
+verification:
+    assurance_level: E
+    formalization_status: valid
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T06:34:10Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T07:28:51Z"
+stakeholder:
+    obligation_suppressions:
+        - id: panic_free_input_handling
+          reason: .unwrap() in tree_cache.rs operates on Mutex acquisitions where poisoning is documented as unrecoverable (process should crash on poisoned tree-cache lock — there is no safe recovery path).
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:51Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1
