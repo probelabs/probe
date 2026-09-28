@@ -1408,3 +1408,195 @@ fn test_config_scope_precedence() {
         Some(temp_dir.path()),
     );
 }
+
+#[test]
+fn test_cli_grep_basic() {
+    let temp_dir = make_safe_tempdir();
+    create_test_directory_structure(&temp_dir);
+
+    // Run the CLI with basic grep
+    let (stdout, stderr, success) = run_probe_command(&[
+        "grep",
+        "search", // Pattern to search for
+        temp_dir.path().to_str().unwrap(),
+        "--color",
+        "never",
+    ]);
+
+    // Check that the command succeeded
+    assert!(success, "Command failed with stderr: {stderr}");
+
+    // Check grep-style output format (file:line:content)
+    assert!(
+        stdout.contains(":"),
+        "Should contain colon separators in grep format"
+    );
+
+    // Check that it found matches in files
+    assert!(
+        stdout.contains("search.rs"),
+        "Should find matches in Rust file"
+    );
+    assert!(
+        stdout.contains("search.js"),
+        "Should find matches in JavaScript file"
+    );
+}
+
+#[test]
+fn test_cli_grep_case_insensitive() {
+    let temp_dir = make_safe_tempdir();
+    create_test_file(
+        &temp_dir,
+        "test.txt",
+        "Hello World\nHELLO world\nhello WORLD",
+    );
+
+    // Run grep with case-insensitive flag
+    let (stdout, stderr, success) = run_probe_command(&[
+        "grep",
+        "-i",
+        "HELLO",
+        temp_dir.path().to_str().unwrap(),
+        "--color",
+        "never",
+    ]);
+
+    assert!(success, "Command failed with stderr: {stderr}");
+
+    // Should match all three lines
+    assert!(stdout.contains("Hello World"));
+    assert!(stdout.contains("HELLO world"));
+    assert!(stdout.contains("hello WORLD"));
+}
+
+#[test]
+fn test_cli_grep_count() {
+    let temp_dir = make_safe_tempdir();
+    create_test_file(&temp_dir, "test.txt", "search\nfoo\nsearch\nbar\nsearch");
+
+    // Run grep with count flag
+    let (stdout, stderr, success) =
+        run_probe_command(&["grep", "-c", "search", temp_dir.path().to_str().unwrap()]);
+
+    assert!(success, "Command failed with stderr: {stderr}");
+
+    // Should show count of 3 matches
+    assert!(stdout.contains(":3"), "Should show 3 matches");
+}
+
+#[test]
+fn test_cli_grep_files_with_matches() {
+    let temp_dir = make_safe_tempdir();
+    create_test_directory_structure(&temp_dir);
+
+    // Run grep with files-with-matches flag
+    let (stdout, stderr, success) =
+        run_probe_command(&["grep", "-l", "search", temp_dir.path().to_str().unwrap()]);
+
+    assert!(success, "Command failed with stderr: {stderr}");
+
+    // Should only show filenames
+    assert!(stdout.contains("search.rs") || stdout.contains("search.js"));
+
+    // Should not show line numbers or content
+    assert!(
+        !stdout.contains("::"),
+        "Should not contain content separators"
+    );
+}
+
+#[test]
+fn test_cli_grep_invert_match() {
+    let temp_dir = make_safe_tempdir();
+    create_test_file(&temp_dir, "test.txt", "apple\nbanana\napple\norange");
+
+    // Run grep with invert-match flag
+    let (stdout, stderr, success) = run_probe_command(&[
+        "grep",
+        "-v",
+        "apple",
+        temp_dir.path().to_str().unwrap(),
+        "--color",
+        "never",
+    ]);
+
+    assert!(success, "Command failed with stderr: {stderr}");
+
+    // Should only show non-matching lines
+    assert!(stdout.contains("banana"));
+    assert!(stdout.contains("orange"));
+    assert!(!stdout.contains("apple"), "Should not contain 'apple'");
+}
+
+#[test]
+fn test_cli_grep_context() {
+    let temp_dir = make_safe_tempdir();
+    create_test_file(&temp_dir, "test.txt", "line1\nline2\ntarget\nline4\nline5");
+
+    // Run grep with context flag
+    let (stdout, stderr, success) = run_probe_command(&[
+        "grep",
+        "-C",
+        "1",
+        "target",
+        temp_dir.path().to_str().unwrap(),
+        "--color",
+        "never",
+    ]);
+
+    assert!(success, "Command failed with stderr: {stderr}");
+
+    // Should show context lines
+    assert!(stdout.contains("line2"));
+    assert!(stdout.contains("target"));
+    assert!(stdout.contains("line4"));
+
+    // Context lines should use '-' separator
+    assert!(
+        stdout.contains("-"),
+        "Should contain context line separator"
+    );
+}
+
+// The npm package's grep() and the MCP `grep` tool shell out to `probe grep` with
+// these flags, so these tests guard that contract as well as the subcommand itself.
+#[test]
+fn test_cli_grep_npm_mcp_line_number_contract() {
+    let temp_dir = make_safe_tempdir();
+    let file_path = create_test_file(&temp_dir, "notes.txt", "alpha\nneedle here\nomega\n");
+
+    let (stdout, stderr, success) = run_probe_command(&[
+        "grep",
+        "-n",
+        "--color",
+        "never",
+        "needle",
+        temp_dir.path().to_str().unwrap(),
+    ]);
+
+    assert!(success, "Command failed with stderr: {stderr}");
+    assert_eq!(
+        stdout.trim(),
+        format!("{}:2:needle here", file_path.display())
+    );
+}
+
+#[test]
+fn test_cli_grep_npm_mcp_count_contract() {
+    let temp_dir = make_safe_tempdir();
+    let file_path = create_test_file(&temp_dir, "notes.txt", "Needle\nhay\nneedle\n");
+
+    let (stdout, stderr, success) = run_probe_command(&[
+        "grep",
+        "-i",
+        "-c",
+        "--color",
+        "never",
+        "NEEDLE",
+        temp_dir.path().to_str().unwrap(),
+    ]);
+
+    assert!(success, "Command failed with stderr: {stderr}");
+    assert_eq!(stdout.trim(), format!("{}:2", file_path.display()));
+}
