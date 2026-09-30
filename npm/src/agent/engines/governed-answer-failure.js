@@ -5,6 +5,16 @@ const GOVERNED_PROVIDER_ENGINE_FAILURE_BOUNDARIES = new Set(['acquire', 'query',
 const GOVERNED_NATIVE_EVENT_FAILURE_BOUNDARIES = new Set([
   'raw_item_predicate', 'live_envelope_session',
 ]);
+const GOVERNED_NATIVE_EVENT_FAILURE_RAW_ITEM_PREDICATES = new Set([
+  'shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
+  'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit', 'tool_event_limit', 'tool_call_limit',
+  'message_content_array', 'message_content_empty', 'message_content_limit', 'message_content_kind',
+  'message_content_text_type', 'message_content_text_limit', 'reasoning_summary_array',
+  'reasoning_summary_nonempty', 'reasoning_encrypted_content_type', 'reasoning_encrypted_content_limit',
+  'tool_output_array', 'tool_output_limit', 'tool_output_kind', 'tool_output_text_type',
+  'tool_output_text_limit',
+  'final_answer_cardinality',
+]);
 const GOVERNED_NATIVE_EVENT_FAILURE_SUBREASONS = new Set([
   'session_sequence', 'envelope_shape', 'correlation', 'attestation',
 ]);
@@ -27,6 +37,28 @@ const GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS = new Set([
   'required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems',
   'multiple', 'unknown',
 ]);
+const GOVERNED_CODEX_EXEC_FAILURE_VERSION = 'probe.governed-codex-exec-failure/v1';
+const GOVERNED_CODEX_EXEC_FAILURE_CODES = new Set([
+  'ANSWER_CARDINALITY', 'CANCELLED', 'CANONICAL', 'CLEANUP', 'CONFIG', 'DUPLICATE', 'EVENT',
+  'EVENT_CATEGORY', 'EVENT_LIMIT', 'EVENT_ORDER', 'INCOMPLETE', 'INCOMPLETE_ITEM', 'ITEM',
+  'ITEM_ORDER', 'ITEM_STATUS', 'JSONL', 'MCP', 'MCP_EVIDENCE', 'ONE_QUERY', 'OUTPUT_OVERFLOW',
+  'SETUP', 'SPAWN', 'TIMEOUT', 'TOOL_POLICY', 'USAGE', 'VERSION', 'EXIT',
+].map(code => `GOVERNED_CODEX_EXEC_${code}`));
+const GOVERNED_CODEX_EXEC_STDERR_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const GOVERNED_CODEX_EXEC_ITEM_PREDICATES = new Set([
+  'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
+  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_changes', 'item_status',
+  'item_error', 'item_started_payload', 'tool_id',
+]);
+const GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES = new Set(['item.started', 'item.completed']);
+const GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES = new Set(['error', 'turn.failed']);
+const GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR = Object.freeze({
+  type: 'invalid_request_error', status: 400, code: 'invalid_json_schema',
+  param: 'text.format.schema', schemaKeyword: 'uniqueItems',
+});
+const GOVERNED_CODEX_EXEC_ITEM_TYPES = new Set(['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change']);
+const GOVERNED_CODEX_EXEC_FIELD_TYPES = new Set(['null', 'array', 'object', 'string', 'number', 'boolean']);
+const GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const GOVERNED_ATTESTATION_ERROR_PREDICATES = new Map([
   ['Invalid event', 'event_shape'], ['Invalid event.method', 'event_shape'],
   ['Invalid event.jsonrpc', 'jsonrpc'], ['Invalid event.params', 'params_shape'],
@@ -72,11 +104,117 @@ function governedAttestationPredicate(error) {
   return error instanceof TypeError ? GOVERNED_ATTESTATION_ERROR_PREDICATES.get(error.message) ?? null : null;
 }
 
+function closeRejectedItemFields(value) {
+  if (!Array.isArray(value) || value.length > 32) return null;
+  let previousName = null;
+  const fields = [];
+  for (const field of value) {
+    if (!field || typeof field !== 'object' || Array.isArray(field)) return null;
+    const keys = Object.keys(field);
+    if (keys.length < 2 || keys.length > 3 || !keys.includes('name') || !keys.includes('type') ||
+        (keys.length === 3 && !keys.includes('size'))) return null;
+    const name = ownDataValue(field, 'name');
+    const type = ownDataValue(field, 'type');
+    if (typeof name !== 'string' || (name !== '<unsafe>' && !GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME.test(name)) ||
+        !GOVERNED_CODEX_EXEC_FIELD_TYPES.has(type) || (previousName !== null && name < previousName)) return null;
+    const hasSize = Object.prototype.hasOwnProperty.call(field, 'size');
+    const size = ownDataValue(field, 'size');
+    if (hasSize && (type !== 'string' && type !== 'array' || !Number.isSafeInteger(size) || size < 0)) return null;
+    if (!hasSize && (type === 'string' || type === 'array')) return null;
+    fields.push(Object.freeze({ name, type, ...(hasSize ? { size } : {}) }));
+    previousName = name;
+  }
+  return Object.freeze(fields);
+}
+
+function closeRejectedItemEvent(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  const baseKeys = 'eventFields,eventType,itemFields,itemType,predicate,source';
+  const statusKeys = 'eventFields,eventType,itemFields,itemStatus,itemType,predicate,source';
+  if (keys.join(',') !== baseKeys && keys.join(',') !== statusKeys) return null;
+  const source = ownDataValue(value, 'source');
+  const predicate = ownDataValue(value, 'predicate');
+  const eventType = ownDataValue(value, 'eventType');
+  const itemType = ownDataValue(value, 'itemType');
+  const itemStatus = ownDataValue(value, 'itemStatus');
+  const eventFields = closeRejectedItemFields(ownDataValue(value, 'eventFields'));
+  const itemFields = closeRejectedItemFields(ownDataValue(value, 'itemFields'));
+  if (source !== 'codex-exec-rejected-item/v1' || !GOVERNED_CODEX_EXEC_ITEM_PREDICATES.has(predicate) ||
+      !GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES.has(eventType) || !GOVERNED_CODEX_EXEC_ITEM_TYPES.has(itemType) ||
+      !eventFields || !itemFields || (itemStatus !== undefined && predicate !== 'item_status') ||
+      (itemStatus !== undefined && itemStatus !== 'failed' && itemStatus !== 'declined') ||
+      (itemStatus === undefined && keys.includes('itemStatus'))) return null;
+  return Object.freeze({ source, predicate, eventType, itemType, eventFields, itemFields,
+    ...(itemStatus === undefined ? {} : { itemStatus }) });
+}
+
+function closeRejectedFailureEvent(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  const baseKeys = 'category,eventFields,eventType,source';
+  const providerKeys = 'category,eventFields,eventType,providerError,source';
+  if (keys.join(',') !== baseKeys && keys.join(',') !== providerKeys) return null;
+  const source = ownDataValue(value, 'source');
+  const category = ownDataValue(value, 'category');
+  const eventType = ownDataValue(value, 'eventType');
+  const eventFields = closeRejectedItemFields(ownDataValue(value, 'eventFields'));
+  const providerError = ownDataValue(value, 'providerError');
+  const providerErrorKeys = providerError && typeof providerError === 'object' && !Array.isArray(providerError)
+    ? Object.keys(providerError).sort().join(',') : null;
+  if (source !== 'codex-exec-rejected-failure/v1' || category !== 'failure' ||
+      !GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES.has(eventType) || !eventFields ||
+      (keys.join(',') === providerKeys && providerErrorKeys !== 'code,param,schemaKeyword,status,type') ||
+      (keys.join(',') === baseKeys && providerError !== undefined)) return null;
+  if (providerError !== undefined &&
+      (ownDataValue(providerError, 'type') !== 'invalid_request_error' || ownDataValue(providerError, 'status') !== 400 ||
+       ownDataValue(providerError, 'code') !== 'invalid_json_schema' || ownDataValue(providerError, 'param') !== 'text.format.schema' ||
+       ownDataValue(providerError, 'schemaKeyword') !== 'uniqueItems')) return null;
+  return Object.freeze({ source, category, eventType, eventFields,
+    ...(providerError === undefined ? {} : { providerError: GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR }) });
+}
+
+function ownDataValue(value, key) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch { return undefined; }
+}
+
+function closeProviderEngineDiagnostic(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length < 2 || keys.length > 4 || !keys.includes('version') || !keys.includes('code') ||
+      keys.some(key => !['version', 'code', 'stderr', 'event'].includes(key))) return null;
+  const version = ownDataValue(value, 'version');
+  const code = ownDataValue(value, 'code');
+  if (version !== GOVERNED_CODEX_EXEC_FAILURE_VERSION || typeof code !== 'string' || !GOVERNED_CODEX_EXEC_FAILURE_CODES.has(code)) return null;
+  const stderr = ownDataValue(value, 'stderr');
+  let closedStderr;
+  if (stderr !== undefined) {
+    if (!stderr || typeof stderr !== 'object' || Array.isArray(stderr) ||
+      ![...Object.keys(stderr)].every(key => ['source', 'bytes', 'digest', 'safeMessage'].includes(key)) ||
+      Object.keys(stderr).length < 3 || Object.keys(stderr).length > 4 ||
+      ownDataValue(stderr, 'source') !== 'codex-exec-stderr/v1' ||
+      !Number.isSafeInteger(ownDataValue(stderr, 'bytes')) || ownDataValue(stderr, 'bytes') < 1 || ownDataValue(stderr, 'bytes') > 1048576 ||
+      !GOVERNED_CODEX_EXEC_STDERR_DIGEST.test(ownDataValue(stderr, 'digest'))) return null;
+    const safeMessage = ownDataValue(stderr, 'safeMessage');
+    closedStderr = Object.freeze({ source: 'codex-exec-stderr/v1', bytes: ownDataValue(stderr, 'bytes'), digest: ownDataValue(stderr, 'digest'),
+      ...(safeMessage === 'access_token_refresh_revoked' ? { safeMessage } : {}) });
+  }
+  const event = ownDataValue(value, 'event');
+  const closedEvent = event === undefined ? null : closeRejectedItemEvent(event) ?? closeRejectedFailureEvent(event);
+  if (event !== undefined && !closedEvent) return null;
+  return Object.freeze({ version, code, ...(closedStderr ? { stderr: closedStderr } : {}), ...(closedEvent ? { event: closedEvent } : {}) });
+}
+
 export class GovernedAnswerFailure extends Error {
   constructor(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
     nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
     schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-    providerEngineFailureBoundary = null) {
+    providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null,
+    providerEngineDiagnostic = null) {
     super();
     delete this.stack;
     const answerFailureStage = GOVERNED_ANSWER_FAILURE_STAGES.has(stage) ? stage : 'unknown';
@@ -90,11 +228,27 @@ export class GovernedAnswerFailure extends Error {
         ? providerEngineFailureBoundary : null,
       enumerable: true,
     });
+    if (answerFailureStage === 'provider_engine' && providerEngineDiagnostic !== null &&
+      providerEngineDiagnostic !== undefined) {
+      const closedDiagnostic = closeProviderEngineDiagnostic(providerEngineDiagnostic);
+      if (closedDiagnostic) Object.defineProperty(this, 'providerEngineDiagnostic', {
+        value: closedDiagnostic,
+        enumerable: true,
+      });
+    }
     if (answerFailureStage === 'native_event_grammar') Object.defineProperty(this, 'nativeEventFailureBoundary', {
       value: GOVERNED_NATIVE_EVENT_FAILURE_BOUNDARIES.has(nativeEventFailureBoundary)
         ? nativeEventFailureBoundary : null,
       enumerable: true,
     });
+    if (answerFailureStage === 'native_event_grammar' &&
+      nativeEventFailureBoundary === 'raw_item_predicate') {
+      Object.defineProperty(this, 'nativeEventFailureRawItemPredicate', {
+        value: GOVERNED_NATIVE_EVENT_FAILURE_RAW_ITEM_PREDICATES.has(nativeEventFailureRawItemPredicate)
+          ? nativeEventFailureRawItemPredicate : null,
+        enumerable: true,
+      });
+    }
     if (answerFailureStage === 'native_event_grammar' &&
       nativeEventFailureBoundary === 'live_envelope_session') {
       Object.defineProperty(this, 'nativeEventFailureSubreason', {
@@ -143,21 +297,26 @@ export class GovernedAnswerFailure extends Error {
 export function governedAnswerFailure(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
   nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
   schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-  providerEngineFailureBoundary = null) {
+  providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null,
+  providerEngineDiagnostic = null) {
   return new GovernedAnswerFailure(stage, nativeEventFailureBoundary, nativeEventFailureSubreason,
     nativeEventFailureCorrelationOperand, nativeEventFailureAttestationPredicate,
-    schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary);
+    schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary,
+    nativeEventFailureRawItemPredicate, providerEngineDiagnostic);
 }
 
 export function normalizeGovernedAnswerFailure(error, fallback = 'unknown', nativeEventFailureBoundary = null,
   nativeEventFailureSubreason = null, nativeEventFailureCorrelationOperand = null,
   schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-  providerEngineFailureBoundary = null, nativeEventFailureAttestationPredicate = null) {
+  providerEngineFailureBoundary = null, nativeEventFailureAttestationPredicate = null,
+  nativeEventFailureRawItemPredicate = null) {
   return error instanceof GovernedAnswerFailure ? error
     : governedAnswerFailure(fallback, nativeEventFailureBoundary, nativeEventFailureSubreason,
       nativeEventFailureCorrelationOperand,
       fallback === 'native_event_grammar' && nativeEventFailureBoundary === 'live_envelope_session' &&
         nativeEventFailureSubreason === 'attestation'
         ? nativeEventFailureAttestationPredicate ?? governedAttestationPredicate(error) : null,
-      schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary);
+      schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary,
+      fallback === 'native_event_grammar' && nativeEventFailureBoundary === 'raw_item_predicate'
+        ? nativeEventFailureRawItemPredicate : null);
 }
