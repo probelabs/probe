@@ -331,9 +331,10 @@ fn format_and_print_color_results(
             "java" => "java",
             "rb" => "ruby",
             "php" => "php",
+            "sh" | "bash" => "bash",
+            "qml" => "javascript",
             "sol" => "solidity",
             "cr" => "crystal",
-            "sh" => "bash",
             "md" => "markdown",
             "json" => "json",
             "yaml" | "yml" => "yaml",
@@ -1351,8 +1352,12 @@ pub fn collect_parent_context_for_line(
 ) -> Vec<crate::models::ParentContext> {
     let mut contexts = Vec::new();
 
-    // Get file extension and language implementation
-    let extension = file_extension(std::path::Path::new(file_path));
+    // Get file extension and language implementation (extensionless shell
+    // scripts resolve via first-line shebang sniffing)
+    let extension = crate::language::factory::effective_extension(
+        std::path::Path::new(file_path),
+        source.lines().next(),
+    );
     let language_impl = match get_language_impl(extension) {
         Some(lang) => lang,
         None => return contexts, // Return empty if can't get language
@@ -2349,7 +2354,7 @@ fn get_comment_prefix(extension: &str) -> &'static str {
     match extension {
         // C-style comments
         "rs" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "java" | "js" | "jsx" | "ts"
-        | "tsx" | "cs" | "swift" | "go" | "php" | "sol" => "//",
+        | "tsx" | "cs" | "swift" | "go" | "php" | "qml" | "sol" => "//",
 
         // Python-style comments
         "py" | "rb" | "cr" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
@@ -3121,6 +3126,10 @@ mod tests {
         assert_eq!(get_comment_prefix("py"), "#");
         assert_eq!(get_comment_prefix("rb"), "#");
         assert_eq!(get_comment_prefix("sh"), "#");
+        assert_eq!(get_comment_prefix("bash"), "#");
+
+        // Test QML (JS-style comments)
+        assert_eq!(get_comment_prefix("qml"), "//");
 
         // Test default
         assert_eq!(get_comment_prefix("unknown"), "//");

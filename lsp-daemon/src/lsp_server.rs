@@ -2354,6 +2354,8 @@ impl LspServer {
             Some("clj") | Some("cljs") => "clojure",
             Some("lua") => "lua",
             Some("zig") => "zig",
+            Some("sh") | Some("bash") => "bash",
+            Some("qml") => "qml",
             _ => "plaintext",
         }
     }

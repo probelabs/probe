@@ -331,6 +331,9 @@ impl GenericAnalyzer {
                     "cr" => {
                         detected.insert("Crystal");
                     }
+                    "qml" => {
+                        detected.insert("QML");
+                    }
                     "dart" => {
                         detected.insert("Dart");
                     }

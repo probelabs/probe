@@ -172,7 +172,9 @@ pub enum Commands {
             "crystal", "cr",
             "haskell", "hs", "lhs",
             "csharp", "cs",
-            "yaml", "yml"
+            "yaml", "yml",
+            "bash", "sh",
+            "qml"
         ])]
         language: Option<String>,
 
@@ -364,7 +366,9 @@ pub enum Commands {
             "crystal", "cr",
             "haskell", "hs", "lhs",
             "csharp", "cs",
-            "yaml", "yml"
+            "yaml", "yml",
+            "bash", "sh",
+            "qml"
         ])]
         language: Option<String>,
 

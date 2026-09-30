@@ -24,6 +24,8 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
 | YAML | `.yaml`, `.yml` | ✅ | ✅ |
+| Bash | `.sh`, `.bash` | ✅ | ✅ |
+| QML | `.qml` | ✅ | ✅ |
 
 ## Language Detection
 
@@ -171,6 +173,29 @@ Go also implements special handling for nested struct types.
 - **Document Structure**: Handles multi-document YAML streams
 - **Anchor and Alias Support**: Properly handles YAML anchors and aliases
 - **Test Detection**: Identifies test-related configuration keys and values
+
+### Bash
+
+- **Function Extraction**: Extracts function definitions (`foo() { ... }` and `function foo { ... }` styles)
+- **Control Block Extraction**: Extracts `if`/`case`/`for`/`while` blocks as structured units
+- **Variable Declarations**: Extracts variable assignments and `local`/`readonly`/`export`/`declare` statements
+- **Heredoc Handling**: Properly handles heredoc bodies
+- **Comment Extraction**: Extracts `#` comments and associates them with following code
+- **Test Detection**: Identifies `test_*` function naming conventions and Bats-style `@test` blocks; `test_*.sh`, `*_test.sh`, and `*.bats` files are treated as test files
+- **Structural Queries**: Supported by the `query` command via ast-grep's bundled Bash grammar
+- **LSP / Indexing**: Tree-sitter indexing in the LSP daemon; optional enrichment via [bash-language-server](https://github.com/bash-lsp/bash-language-server) when installed (`npm i -g bash-language-server`)
+
+### QML
+
+- **Object Extraction**: Extracts QML object definitions (`Rectangle { ... }`) including nested objects
+- **Property Bindings**: Extracts property bindings and signal handlers (`onClicked: { ... }`)
+- **Property Declarations**: Extracts `property` declarations with types and modifiers
+- **Signal Declarations**: Extracts custom `signal` declarations
+- **JavaScript Functions**: Extracts embedded JavaScript `function` declarations
+- **Import Statements**: Extracts `import` statements (module, directory, and alias forms)
+- **Test Detection**: Identifies QtTest `TestCase` objects and `test_*` functions; `tst_*.qml` files (Qt Test convention) are treated as test files
+- **Structural Queries**: Supported by the `query` command via the bundled tree-sitter-qmljs grammar (object-definition patterns; standalone property/signal patterns are not supported by the grammar)
+- **LSP / Indexing**: Tree-sitter indexing in the LSP daemon; optional enrichment via `qmlls` when a Qt SDK is installed
 
 ## Test Detection
 

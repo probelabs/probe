@@ -3,6 +3,7 @@ use probe_code::language::parser::parse_file_for_code_blocks;
 use tree_sitter::Language;
 
 // Import tree-sitter language crates
+extern crate tree_sitter_bash;
 extern crate tree_sitter_c;
 extern crate tree_sitter_c_sharp;
 extern crate tree_sitter_cpp;
@@ -13,6 +14,7 @@ extern crate tree_sitter_java;
 extern crate tree_sitter_javascript;
 extern crate tree_sitter_php;
 extern crate tree_sitter_python;
+extern crate tree_sitter_qmljs;
 extern crate tree_sitter_ruby;
 extern crate tree_sitter_rust;
 extern crate tree_sitter_solidity;
@@ -34,6 +36,8 @@ fn get_language(extension: &str) -> Option<Language> {
         "rb" => Some(tree_sitter_ruby::LANGUAGE.into()),
         "swift" => Some(tree_sitter_swift::LANGUAGE.into()),
         "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        "sh" | "bash" => Some(tree_sitter_bash::LANGUAGE.into()),
+        "qml" => Some(tree_sitter_qmljs::LANGUAGE.into()),
         "sol" => Some(tree_sitter_solidity::LANGUAGE.into()),
         "cr" => Some(tree_sitter_crystal::LANGUAGE.into()),
         "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE.into()),
@@ -61,6 +65,8 @@ fn test_get_language() {
     assert!(get_language("rb").is_some()); // Ruby
     assert!(get_language("swift").is_some()); // Swift
     assert!(get_language("cs").is_some()); // C#
+    assert!(get_language("sh").is_some()); // Bash
+    assert!(get_language("qml").is_some()); // QML
     assert!(get_language("sol").is_some()); // Solidity
     assert!(get_language("cr").is_some()); // Crystal
     assert!(get_language("hs").is_some()); // Haskell
@@ -826,6 +832,48 @@ fn test_csharp_language_implementation() {
         language.is_some(),
         "Should be able to get C# tree-sitter language"
     );
+}
+
+#[test]
+fn test_bash_language_implementation() {
+    // Get the Bash language implementation through the factory
+    let bash_impl = get_language_impl("sh");
+
+    // Verify that we can get a Bash language implementation for both extensions
+    assert!(
+        bash_impl.is_some(),
+        "Should be able to get Bash language implementation for 'sh'"
+    );
+    assert!(
+        get_language_impl("bash").is_some(),
+        "Should be able to get Bash language implementation for 'bash'"
+    );
+
+    // Verify the tree-sitter language parses a simple script
+    let language = bash_impl.unwrap().get_tree_sitter_language();
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&language).unwrap();
+    let tree = parser.parse("hello() {\n    echo hi\n}\n", None);
+    assert!(tree.is_some(), "Bash parser should parse a function");
+}
+
+#[test]
+fn test_qml_language_implementation() {
+    // Get the QML language implementation through the factory
+    let qml_impl = get_language_impl("qml");
+
+    // Verify that we can get a QML language implementation
+    assert!(
+        qml_impl.is_some(),
+        "Should be able to get QML language implementation"
+    );
+
+    // Verify the tree-sitter language parses a simple QML document
+    let language = qml_impl.unwrap().get_tree_sitter_language();
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&language).unwrap();
+    let tree = parser.parse("import QtQuick 2.15\nItem {\n    width: 10\n}\n", None);
+    assert!(tree.is_some(), "QML parser should parse an object");
 }
 
 // Helper function to print the AST structure

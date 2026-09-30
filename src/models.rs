@@ -92,9 +92,7 @@ pub struct SearchResult {
 pub struct CodeBlock {
     pub start_row: usize,
     pub end_row: usize,
-    #[allow(dead_code)]
     pub start_byte: usize,
-    #[allow(dead_code)]
     pub end_byte: usize,
     pub node_type: String,
     // Parent node information

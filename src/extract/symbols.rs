@@ -62,7 +62,7 @@ pub fn extract_symbols_with_options(path: &Path, options: &SymbolOptions) -> Res
 
     let content = file_guard::read_searchable_text_file(path)?;
 
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    let extension = crate::language::factory::effective_extension(path, content.lines().next());
 
     let language_impl = get_language_impl(extension);
     let user_text_extension = matches_text_extension(extension, &options.text_extensions);
@@ -138,7 +138,7 @@ pub(crate) fn normalize_extension(extension: &str) -> String {
 pub(crate) fn is_standard_text_extension(extension: &str) -> bool {
     matches!(
         normalize_extension(extension).as_str(),
-        "1" | "5" | "txt" | "conf" | "tex" | "sh" | "json"
+        "1" | "5" | "txt" | "conf" | "tex" | "json"
     )
 }
 
@@ -177,6 +177,9 @@ fn is_container_node(kind: &str) -> bool {
             | "instance_declarations"
             | "enum_declaration"
             | "enum_item"
+            | "ui_object_definition"
+            | "ui_object_definition_binding"
+            | "ui_inline_component"
             | "struct_declaration"
             | "contract_body"
             | "declaration_list"
@@ -298,6 +301,7 @@ fn collect_children_symbols(
                 | "object_type"
                 | "interface_body"
                 | "statement_block"
+                | "ui_object_initializer"
                 | "class_declarations"
                 | "instance_declarations"
                 | "declarations"
@@ -745,6 +749,16 @@ fn normalize_kind(kind: &str) -> String {
         "event_definition" => "event",
         "error_declaration" => "error",
         "field_declaration" => "field",
+        // Bash
+        "variable_assignment" | "declaration_command" => "variable",
+        // QML (tree-sitter-qmljs)
+        "ui_object_definition" | "ui_object_definition_binding" => "class",
+        "ui_inline_component" => "component",
+        "ui_property" => "property",
+        "ui_binding" => "binding",
+        "ui_signal" => "signal",
+        "ui_import" => "import",
+        "ui_pragma" => "pragma",
         other => other,
     }
     .to_string()

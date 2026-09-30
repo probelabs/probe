@@ -1,0 +1,2 @@
+This extensionless file has no shebang and no shell syntax.
+It must never be detected as bash: tool_greet should not be found here.

@@ -265,6 +265,10 @@ fn build_file_list(
             "*_test.rb",
             "test_*.rb",
             "*_spec.rb",
+            "test_*.sh",
+            "*_test.sh",
+            "*.bats",
+            "tst_*.qml",
             "*_spec.cr",
             "*Test.php",
             "test_*.php",
@@ -390,6 +394,11 @@ fn build_file_list(
     })
 }
 
+/// Check if a path looks like a test file relative to the search root.
+///
+/// Needed because glob-based test exclusions do not fire when the search root
+/// itself is a test directory (e.g. searching a `tests/` or `spec/` directory
+/// directly).
 fn is_test_path(search_root: &Path, file_path: &Path) -> bool {
     if search_root.is_dir()
         && search_root
@@ -426,6 +435,10 @@ fn is_test_path(search_root: &Path, file_path: &Path) -> bool {
         || file_name.contains(".spec.")
         || file_name.ends_with("Test.java")
         || file_name.ends_with("Test.php")
+        // Bash: Bats test files
+        || file_name.ends_with(".bats")
+        // QML: Qt Test convention
+        || (file_name.starts_with("tst_") && file_name.ends_with(".qml"))
 }
 
 fn is_test_dir_name(name: &str) -> bool {
@@ -576,6 +589,8 @@ fn get_language_extensions(language: &str) -> Vec<String> {
         "csharp" => vec![".cs".to_string()],
         "markdown" => vec![".md".to_string(), ".markdown".to_string()],
         "yaml" => vec![".yaml".to_string(), ".yml".to_string()],
+        "bash" | "sh" => vec![".sh".to_string(), ".bash".to_string()],
+        "qml" => vec![".qml".to_string()],
         _ => vec![], // Return empty vector for unknown languages
     }
 }
@@ -624,7 +639,11 @@ pub fn get_file_list_by_language(
                     let ext_str = format!(".{ext_lossy}");
                     extensions.iter().any(|e| e == &ext_str)
                 } else {
-                    false
+                    // Extensionless shell scripts still match a bash language
+                    // filter via first-line shebang sniffing.
+                    matches!(language.unwrap().to_lowercase().as_str(), "bash" | "sh")
+                        && crate::language::factory::shebang_extension_for_path(file)
+                            .is_some()
                 }
             })
             .cloned()

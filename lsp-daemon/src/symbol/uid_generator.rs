@@ -27,6 +27,8 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "php" => Some("php"),
         "swift" => Some("swift"),
         "cs" => Some("csharp"),
+        "sh" | "bash" => Some("bash"),
+        "qml" => Some("qml"),
         "sol" => Some("solidity"),
         "cr" => Some("crystal"),
         "hs" | "lhs" => Some("haskell"),
@@ -110,6 +112,12 @@ impl SymbolUIDGenerator {
         rules.insert("solidity".to_string(), LanguageRules::solidity());
         rules.insert("crystal".to_string(), LanguageRules::crystal());
         rules.insert("haskell".to_string(), LanguageRules::haskell());
+
+        // Bash
+        rules.insert("bash".to_string(), LanguageRules::bash());
+
+        // QML
+        rules.insert("qml".to_string(), LanguageRules::qml());
 
         rules
     }

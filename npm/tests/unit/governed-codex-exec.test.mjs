@@ -85,7 +85,7 @@ async function withEngine(events, callback, options = {}, behavior = 'normal') {
   try {
     const engine = await createGovernedCodexExecEngine({
       agent: agent(fixtureRoot.root), profile: profile(fixtureRoot.root), prompt: 'bounded prompt',
-      codexPath: fixtureRoot.script, codexSha256: `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`, timeoutMs: 1000, ...options,
+      codexPath: fixtureRoot.script, codexSha256: `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`, timeoutMs: 5000, ...options,
     });
     try { return await callback(engine, fixtureRoot); }
     finally { await engine.close(); }

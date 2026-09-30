@@ -383,18 +383,6 @@ export interface GovernedCodexRuntimeAttestation {
   usage: { status: 'unavailable'; };
 }
 
-export interface GovernedCodexExecAttestation {
-  version: 'probe.governed-codex-exec-attestation/v1';
-  profileId: 'luna-xhigh-readonly-v1' | 'luna-xhigh-readonly-native-exec-v1' | 'luna-xhigh-isolated-writer-v1';
-  requested: Record<string, unknown>;
-  enforced: Record<string, unknown>;
-  observed: Record<string, unknown>;
-  executionContext?: { source: 'caller'; invocationDigest: string };
-  dispatch: { source: 'probe-host-exec'; tool: 'codex-exec'; promptDigest: string; promptBytes: number };
-  evidence: { eventCount: number; completedItemCount: number; agentMessageCount: number; probeMcpCallCount: number };
-  usage: { status: 'observed'; inputTokens: number; cachedInputTokens: number; outputTokens: number };
-}
-
 export interface GovernedAnswerResult {
   data: unknown;
   runtimeAttestation: GovernedCodexRuntimeAttestation | GovernedCodexRuntimeAttestationV3 | GovernedCodexExecAttestation;
@@ -435,6 +423,22 @@ export interface GovernedCodexRuntimeAttestationV3 {
   dispatch?: { source: 'probe-host-tools-call'; tool: 'codex'; promptDigest: string; promptBytes: number; };
   evidence: { sessionEventCount: 1; nativeCallCount: number; probeMcpCallCount: number; };
   usage: { status: 'unavailable'; };
+}
+
+export interface GovernedCodexExecAttestation {
+  version: 'probe.governed-codex-exec-attestation/v1';
+  profileId: 'luna-xhigh-readonly-v1' | 'luna-xhigh-readonly-native-exec-v1' | 'luna-xhigh-isolated-writer-v1';
+  requested: Record<string, unknown>;
+  enforced: {
+    source: 'probe-host-codex-exec-argv/v1'; transport: 'exec-jsonl-default-auth-v1'; cliPath: string; cliSha256: `sha256:${string}`; cliVersion: string;
+    configDigest: `sha256:${string}`; launchDigest: `sha256:${string}`; cwdDigest: string; codexHome: 'omitted';
+    environmentPolicy: 'inherit-with-CODEX_HOME-omitted-v1'; ignoreUserConfig: true; ignoreRules: true; ephemeral: true; noShell: true; loopbackMcpDigest: `sha256:${string}`;
+  };
+  observed: { source: 'codex-exec-jsonl/v1'; threadDigest: string; streamDigest: string; terminal: 'turn.completed'; eventCount: number; completedItemCount: number; agentMessageCount: number; usedToolItems: Array<{ category: 'mcp_tool_call' | 'command_execution' | 'file_change'; name: string | null; status: 'completed'; count: number }>; probeMcpCallCount: number; finalDigest: string; finalBytes: number; processExitCode: 0; processSignal: null; };
+  executionContext?: { source: 'caller'; invocationDigest: string };
+  dispatch: { source: 'probe-host-exec'; tool: 'codex-exec'; promptDigest: string; promptBytes: number };
+  evidence: { eventCount: number; completedItemCount: number; agentMessageCount: number; probeMcpCallCount: number };
+  usage: { status: 'observed'; inputTokens: number; cachedInputTokens: number; outputTokens: number };
 }
 
 /**

@@ -838,6 +838,14 @@ impl LspDatabaseAdapter {
                     debug!("[TREE_SITTER] Using tree-sitter-php");
                     Some(tree_sitter_php::LANGUAGE_PHP.into())
                 }
+                "bash" | "sh" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-bash");
+                    Some(tree_sitter_bash::LANGUAGE.into())
+                }
+                "qml" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-qmljs");
+                    Some(tree_sitter_qmljs::LANGUAGE.into())
+                }
                 "ruby" | "rb" => {
                     debug!("[TREE_SITTER] Using tree-sitter-ruby");
                     Some(tree_sitter_ruby::LANGUAGE.into())
@@ -966,6 +974,11 @@ impl LspDatabaseAdapter {
             "constructor_declaration" => true,
             // C/C++ symbols (function_declarator is unique to C/C++)
             "function_declarator" | "struct_specifier" | "enum_specifier" => true,
+            // Bash symbols (function_definition above also matches bash; these are bash-specific)
+            "variable_assignment" | "declaration_command" => true,
+            // QML symbols (tree-sitter-qmljs)
+            "ui_object_definition" | "ui_object_definition_binding" | "ui_inline_component"
+            | "ui_property" | "ui_binding" | "ui_signal" => true,
             // Crystal symbols
             "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
             | "method_def" | "abstract_method_def" | "macro_def" | "fun_def" | "alias"
@@ -1207,6 +1220,9 @@ impl LspDatabaseAdapter {
                 | "module_id"
                 | "field_name"
                 | "prefix_id"
+                // Bash grammar uses `word` for function names and `variable_name` for assignments
+                | "word"
+                | "variable_name"
         )
     }
 
@@ -1305,6 +1321,14 @@ impl LspDatabaseAdapter {
             "pattern_synonym" => SymbolKind::Constant,
             "variable_declarator" | "variable_declaration" => SymbolKind::Variable,
             "field_declaration" => SymbolKind::Field,
+            // Bash
+            "variable_assignment" | "declaration_command" => SymbolKind::Variable,
+            // QML (tree-sitter-qmljs)
+            "ui_object_definition" | "ui_object_definition_binding" | "ui_inline_component" => {
+                SymbolKind::Class
+            }
+            "ui_property" | "ui_binding" => SymbolKind::Field,
+            "ui_signal" => SymbolKind::Method,
             _ => SymbolKind::Function, // Default fallback
         }
     }
@@ -2367,6 +2391,8 @@ impl LspDatabaseAdapter {
             "go" => "go",
             "c++" | "cpp" => "cpp",
             "c" => "c",
+            "bash" => "sh",
+            "qml" => "qml",
             "crystal" => "cr",
             "haskell" => "hs",
             _ => language, // Fallback to original if no mapping
@@ -2469,7 +2495,8 @@ impl LspDatabaseAdapter {
     fn get_language_separator(extension: &str) -> &str {
         match extension {
             "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs" => ".",
+            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs"
+            | "sh" | "bash" | "qml" => ".",
             "cr" => "::",
             "php" => "\\",
             _ => "::", // Default to Rust-style for unknown languages
@@ -2489,6 +2516,8 @@ impl LspDatabaseAdapter {
             "java" | "cs" => kind == "method_declaration",
             "go" => kind == "function_declaration",
             "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
+            "sh" | "bash" => matches!(kind, "function_definition"),
+            "qml" => matches!(kind, "function_declaration" | "method_definition"),
             "sol" => matches!(
                 kind,
                 "function_definition"
@@ -2533,6 +2562,10 @@ impl LspDatabaseAdapter {
                 kind,
                 "class_specifier" | "struct_specifier" | "namespace_definition"
             ),
+            // Bash has no namespace constructs
+            "sh" | "bash" => false,
+            // QML ui_object_definition is the enclosing component scope
+            "qml" => matches!(kind, "ui_object_definition" | "ui_inline_component"),
             "sol" => matches!(
                 kind,
                 "contract_declaration"
@@ -2579,7 +2612,10 @@ impl LspDatabaseAdapter {
         // Try to find identifier child node
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if matches!(child.kind(), "identifier" | "name" | "constant") {
+            if matches!(
+                child.kind(),
+                "identifier" | "name" | "constant" | "word" | "variable_name"
+            ) {
                 return Some(child.utf8_text(content).unwrap_or("").to_string());
             }
         }
@@ -2871,6 +2907,49 @@ mod tests {
             .persist(&path)
             .expect("Failed to persist temp file");
         path
+    }
+
+    #[test]
+    fn test_find_symbol_at_position_uses_bash_tree_sitter() {
+        let adapter = create_test_adapter();
+        let bash_code = r#"#!/usr/bin/env bash
+
+greet() {
+  echo "hello"
+}
+"#;
+        let file_path = PathBuf::from("sample.sh");
+
+        let symbol = adapter
+            .find_symbol_at_position(bash_code, &file_path, 3, 1, "bash")
+            .expect("Bash tree-sitter symbol lookup should parse")
+            .expect("function body position should resolve to enclosing function");
+        assert_eq!(symbol.name, "greet");
+        assert_eq!(symbol.kind, SymbolKind::Function);
+    }
+
+    #[test]
+    fn test_find_symbol_at_position_uses_qml_tree_sitter() {
+        let adapter = create_test_adapter();
+        let qml_code = r#"import QtQuick 2.15
+
+Item {
+    id: root
+    property int count: 0
+
+    function increment() {
+        count += 1
+    }
+}
+"#;
+        let file_path = PathBuf::from("sample.qml");
+
+        let symbol = adapter
+            .find_symbol_at_position(qml_code, &file_path, 7, 15, "qml")
+            .expect("QML tree-sitter symbol lookup should parse")
+            .expect("function body position should resolve to enclosing function");
+        assert_eq!(symbol.name, "increment");
+        assert_eq!(symbol.kind, SymbolKind::Function);
     }
 
     #[test]

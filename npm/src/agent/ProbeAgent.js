@@ -3967,7 +3967,9 @@ Follow these instructions carefully:
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
-            let queryOptions = options;
+            let queryOptions = this.governedCodexProfile
+              ? { ...options, abortSignal: this._abortController.signal }
+              : options;
             if (this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT) {
               const { schema: requestedSchema, ...withoutSchema } = options;
               queryOptions = {

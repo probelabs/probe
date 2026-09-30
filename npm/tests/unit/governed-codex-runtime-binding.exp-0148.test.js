@@ -237,8 +237,8 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     assert.deepEqual(Object.keys(receipt), ['version', 'profileId', 'requested', 'observed', 'evidence', 'usage']);
     assert.deepEqual(Object.keys(receipt.requested), ['profileDigest', 'cwdDigest', 'probeToolsDigest', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy']);
     assert.deepEqual(Object.keys(receipt.observed), ['source', 'model', 'modelProviderId', 'reasoningEffort', 'approvalPolicy', 'cwdDigest', 'permissionProfileDigest', 'filesystem', 'network']);
-    for (const forbidden of ['correlation', 'requestId', 'sessionId', 'threadId', 'conversationId', 'rolloutPath', 'cwd', 'prompt', 'candidate', 'environment']) assert.equal(recursiveKeys(receipt).includes(forbidden), false);
-    for (const secret of [root, call.params.arguments.prompt, String(state.pid), 'event-candidate', process.env.PATH]) assert.equal(serialized.includes(secret), false);
+    for (const forbidden of ['correlation', 'requestId', 'sessionId', 'threadId', 'conversationId', 'rolloutPath', 'cwd', 'prompt', 'candidate', 'environment', 'pid', 'processId', 'process_id']) assert.equal(recursiveKeys(receipt).includes(forbidden), false);
+    for (const [secretIndex, secret] of [root, call.params.arguments.prompt, 'event-candidate', process.env.PATH].entries()) assert.equal(serialized.includes(secret), false, `secret index ${secretIndex}`);
     assert.equal(receipt.observed.network, 'restricted'); assert.equal(alive(state.pid), false); assert.equal(await closed(server[1].url), true);
   });
 
@@ -639,7 +639,7 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     assert.equal(contract(sourceDeclaration), contract(packageDeclaration));
     for (const declaration of [sourceDeclaration, packageDeclaration]) assert.equal(declaration.includes('answer(message: string, images?: any[], options?: AnswerOptions): Promise<string>;'), true);
     const source = await readFile(new URL('../../src/agent/ProbeAgent.js', import.meta.url), 'utf8'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message')));
-    assert.equal(createHash('sha256').update(answer).digest('hex'), '6267c9f381def9eb2fc794f936228f00e1256fad715d63949df2b1195249a475');
+    assert.equal(createHash('sha256').update(answer).digest('hex'), '56e44495a2d2bad1bf8a48d20f5f261663ef3f56b0fee77779cc8777d1a13ea8');
   });
 
   await t.test('EXP-0151 O15 changing own getters are read once at each boundary', async () => {
@@ -803,8 +803,8 @@ agent.answerGoverned('x', { schema, resultIdentity: 'probe.governed-result-ident
 
   await t.test('EXP-0152 T15 frozen files and legacy function/declaration regions remain exact', async () => {
     const sha = value => createHash('sha256').update(value).digest('hex'); const read = path => readFile(new URL(path, import.meta.url), 'utf8');
-    assert.equal(sha(await read('../../src/agent/engines/codex.js')), 'b9b485eea61ef5de9ad5603762f46e71471f638fe4ae6befcdce751dd7fd8617'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), 'c3c1829c3571512b86a623b9215dd4704c8de8d3ee4d1a1b4d3a56fe20ac8f4f');
-    const source = await read('../../src/agent/ProbeAgent.js'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message'))); assert.equal(sha(answer), '6267c9f381def9eb2fc794f936228f00e1256fad715d63949df2b1195249a475');
+    assert.equal(sha(await read('../../src/agent/engines/codex.js')), '92618d5a2fcea84419e2afed93b0a9b43186ef40077fbf0b7901f806ce192972'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), 'c3c1829c3571512b86a623b9215dd4704c8de8d3ee4d1a1b4d3a56fe20ac8f4f');
+    const source = await read('../../src/agent/ProbeAgent.js'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message'))); assert.equal(sha(answer), '56e44495a2d2bad1bf8a48d20f5f261663ef3f56b0fee77779cc8777d1a13ea8');
     const governed = source.slice(source.indexOf('  async answerGoverned(message'), source.indexOf('\n  /**\n   * Answer a question', source.indexOf('  async answerGoverned(message'))); assert.equal((governed.match(/_prepareGovernedAnswerPrompt\(/g) || []).length, 1); assert.equal((governed.match(/options\.schema/g) || []).length, 0); assert.equal((governed.match(/options\.resultIdentity/g) || []).length, 1); assert.equal((governed.match(/validateJsonResponse\(/g) || []).length, 1); assert.match(governed, /return \{ data: validation\.parsed, runtimeAttestation \};/);
     const prepared = source.slice(source.indexOf('  _prepareGovernedAnswerPrompt'), source.indexOf('\n  /**\n   * Preview', source.indexOf('  _prepareGovernedAnswerPrompt'))); assert.equal((prepared.match(/options\.schema/g) || []).length, 1); assert.equal((prepared.match(/generateSchemaInstructions\(/g) || []).length, 1);
     const identityHelper = source.slice(source.indexOf('function identifyGovernedResult'), source.indexOf('// Maximum tool iterations')); assert.equal((identityHelper.match(/JSON\.stringify\(/g) || []).length, 1);

@@ -44,6 +44,8 @@ pub fn get_fqn_from_ast_with_content(
         "go" => Some(tree_sitter_go::LANGUAGE),
         "c" => Some(tree_sitter_c::LANGUAGE),
         "cpp" | "cc" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
+        "sh" | "bash" => Some(tree_sitter_bash::LANGUAGE),
+        "qml" => Some(tree_sitter_qmljs::LANGUAGE),
         "sol" => Some(tree_sitter_solidity::LANGUAGE),
         "cr" => Some(tree_sitter_crystal::LANGUAGE),
         "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE),
@@ -104,6 +106,8 @@ fn language_to_extension(language: &str) -> Option<&'static str> {
         "go" => Some("go"),
         "c" => Some("c"),
         "cpp" | "c++" | "cxx" => Some("cpp"),
+        "bash" | "sh" => Some("sh"),
+        "qml" => Some("qml"),
         "solidity" | "sol" => Some("sol"),
         "crystal" | "cr" => Some("cr"),
         "haskell" | "hs" | "lhs" => Some("hs"),
@@ -366,7 +370,8 @@ fn find_declaration_in_descendants<'a>(
 fn get_language_separator(extension: &str) -> &str {
     match extension {
         "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs" => ".",
+        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs"
+        | "sh" | "bash" | "qml" => ".",
         "cr" => "::",
         "php" => "\\",
         _ => "::", // Default to Rust-style for unknown languages
@@ -388,6 +393,8 @@ fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
         "java" | "cs" => kind == "method_declaration",
         "go" => kind == "function_declaration",
         "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
+        "sh" | "bash" => matches!(kind, "function_definition"),
+        "qml" => matches!(kind, "function_declaration" | "method_definition"),
         "sol" => matches!(
             kind,
             "function_definition"
@@ -430,6 +437,10 @@ fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
             kind,
             "class_specifier" | "struct_specifier" | "namespace_definition"
         ),
+        // Bash has no namespace constructs
+        "sh" | "bash" => false,
+        // QML ui_object_definition is the enclosing component scope
+        "qml" => matches!(kind, "ui_object_definition"),
         "sol" => matches!(
             kind,
             "contract_declaration"

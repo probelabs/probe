@@ -160,6 +160,8 @@ Required for accurate parsing:
 | PHP | `php` | .php |
 | Swift | `swift` | .swift |
 | Solidity | `solidity`, `sol` | .sol |
+| Bash | `bash`, `sh` | .sh, .bash |
+| QML | `qml` | .qml |
 | C# | `csharp`, `cs` | .cs |
 
 ```bash

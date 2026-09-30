@@ -104,7 +104,7 @@ pub trait LanguageImpl {
 }
 ```
 
-**Supported:** Rust, JavaScript, TypeScript, Python, Go, C, C++, Java, Ruby, PHP, Swift, Solidity, C#, HTML, Markdown, YAML
+**Supported:** Rust, JavaScript, TypeScript, Python, Go, C, C++, Java, Ruby, PHP, Swift, Solidity, Bash, QML, C#, HTML, Markdown, YAML
 
 ### Performance Optimizations
 

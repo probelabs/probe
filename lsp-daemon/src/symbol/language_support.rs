@@ -318,6 +318,55 @@ impl LanguageRules {
         }
     }
 
+    /// Create rules for Bash
+    pub fn bash() -> Self {
+        Self {
+            scope_separator: ".".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::None,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["sh".to_string(), "bash".to_string()],
+            signature_keywords: vec![
+                "function".to_string(),
+                "local".to_string(),
+                "readonly".to_string(),
+                "export".to_string(),
+                "declare".to_string(),
+                "typeset".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
+    /// Create rules for QML
+    pub fn qml() -> Self {
+        Self {
+            scope_separator: ".".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::RemoveParameterNames,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["qml".to_string()],
+            signature_keywords: vec![
+                "property".to_string(),
+                "signal".to_string(),
+                "function".to_string(),
+                "readonly".to_string(),
+                "default".to_string(),
+                "required".to_string(),
+                "component".to_string(),
+                "import".to_string(),
+                "pragma".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
     /// Create rules for Solidity
     pub fn solidity() -> Self {
         Self {
@@ -602,6 +651,8 @@ impl LanguageRulesFactory {
             "java" => Some(LanguageRules::java()),
             "c" => Some(LanguageRules::c()),
             "cpp" | "c++" | "cxx" => Some(LanguageRules::cpp()),
+            "bash" | "sh" => Some(LanguageRules::bash()),
+            "qml" => Some(LanguageRules::qml()),
             "solidity" | "sol" => Some(LanguageRules::solidity()),
             "crystal" | "cr" => Some(LanguageRules::crystal()),
             "haskell" | "hs" | "lhs" => Some(LanguageRules::haskell()),
@@ -621,6 +672,8 @@ impl LanguageRulesFactory {
             "java".to_string(),
             "c".to_string(),
             "cpp".to_string(),
+            "bash".to_string(),
+            "qml".to_string(),
             "solidity".to_string(),
             "crystal".to_string(),
             "haskell".to_string(),
