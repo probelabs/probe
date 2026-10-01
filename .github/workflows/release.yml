@@ -74,6 +74,12 @@ jobs:
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
 
+      - name: Pin aegis for x86_64 musl compatibility
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          # Temporary: 0.9.15 is the last known-good release with the same C backend; 0.9.20's AVX-512 assembler fails on this musl target.
+          cargo update -p aegis --precise 0.9.15
+
       # Build the Rust project
       - name: Build Release
         timeout-minutes: 45
