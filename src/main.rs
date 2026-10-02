@@ -926,6 +926,41 @@ async fn main() -> Result<()> {
             fast,
         })?,
 
+        Some(Commands::Grep {
+            pattern,
+            paths,
+            ignore_case,
+            line_number,
+            count,
+            files_with_matches,
+            files_without_match,
+            invert_match,
+            before_context,
+            after_context,
+            context,
+            ignore,
+            no_gitignore,
+            color,
+            max_count,
+        }) => grep::handle_grep(grep::GrepParams {
+            pattern,
+            paths,
+            ignore_case,
+            line_number,
+            count,
+            files_with_matches,
+            files_without_match,
+            invert_match,
+            before_context,
+            after_context,
+            context,
+            ignore,
+            no_gitignore: no_gitignore
+                || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            color,
+            max_count,
+        })?,
+
         Some(Commands::Lsp { subcommand }) => {
             // Delegate to LSP manager for actual subcommand handling. Avoid doing
             // extra readiness work here so each subcommand can control connection
