@@ -90,6 +90,20 @@ impl MarkdownLanguage {
     }
 }
 
+/// Returns the longest prefix of `text` that fits in `max_bytes` and ends on a
+/// UTF-8 char boundary; slicing at a raw byte offset panics when a multi-byte
+/// character straddles it.
+fn truncate_to_char_boundary(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 impl LanguageImpl for MarkdownLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
         tree_sitter_md::LANGUAGE.into()
@@ -221,7 +235,10 @@ impl LanguageImpl for MarkdownLanguage {
                         let header_text = self.get_node_text(&child, source);
                         // Truncate if too long
                         if header_text.len() > 60 {
-                            return Some(format!("{}...", &header_text[..60].trim()));
+                            return Some(format!(
+                                "{}...",
+                                truncate_to_char_boundary(&header_text, 60).trim()
+                            ));
                         } else {
                             return Some(header_text.trim().to_string());
                         }
@@ -237,7 +254,10 @@ impl LanguageImpl for MarkdownLanguage {
                         let item_text = self.get_node_text(&child, source);
                         let first_line = item_text.lines().next().unwrap_or("");
                         if first_line.len() > 50 {
-                            return Some(format!("{}...", &first_line[..50].trim()));
+                            return Some(format!(
+                                "{}...",
+                                truncate_to_char_boundary(first_line, 50).trim()
+                            ));
                         } else {
                             return Some(first_line.trim().to_string());
                         }
@@ -250,7 +270,10 @@ impl LanguageImpl for MarkdownLanguage {
                 let quote_text = self.get_node_text(node, source);
                 let first_line = quote_text.lines().next().unwrap_or("");
                 if first_line.len() > 60 {
-                    Some(format!("{}...", &first_line[..60].trim()))
+                    Some(format!(
+                        "{}...",
+                        truncate_to_char_boundary(first_line, 60).trim()
+                    ))
                 } else {
                     Some(first_line.trim().to_string())
                 }
@@ -263,7 +286,10 @@ impl LanguageImpl for MarkdownLanguage {
                 // Link reference: [label]: url "title"
                 let ref_text = self.get_node_text(node, source);
                 if ref_text.len() > 50 {
-                    Some(format!("{}...", &ref_text[..50].trim()))
+                    Some(format!(
+                        "{}...",
+                        truncate_to_char_boundary(&ref_text, 50).trim()
+                    ))
                 } else {
                     Some(ref_text.trim().to_string())
                 }
@@ -469,5 +495,69 @@ describe("test suite", () => {
                 );
             }
         }
+    }
+
+    /// Builds a line whose `prefix` is padded so that a 3-byte em dash starts
+    /// one byte before `limit`, i.e. the truncation offset lands inside it.
+    fn line_straddling_limit(prefix: &str, limit: usize, suffix: &str) -> String {
+        let line = format!(
+            "{prefix}{}\u{2014}{suffix}",
+            "x".repeat(limit - 1 - prefix.len())
+        );
+        assert!(!line.is_char_boundary(limit));
+        line
+    }
+
+    fn assert_truncated_signature(source: &str, kind: &str, limit: usize) {
+        let lang = MarkdownLanguage::new();
+        let tree = parse_markdown(source);
+        let node = get_first_node_of_kind(tree.root_node(), kind)
+            .unwrap_or_else(|| panic!("expected a {kind} node"));
+        let sig = lang
+            .get_symbol_signature(&node, source.as_bytes())
+            .unwrap_or_else(|| panic!("expected a {kind} signature"));
+        assert!(
+            sig.ends_with("..."),
+            "{kind} signature not truncated: {sig}"
+        );
+        assert!(sig.len() <= limit + "...".len());
+        assert!(!sig.contains('\u{2014}'));
+    }
+
+    #[test]
+    fn test_truncate_to_char_boundary() {
+        assert_eq!(truncate_to_char_boundary("short", 50), "short");
+        assert_eq!(truncate_to_char_boundary("abcdef", 3), "abc");
+        // The em dash occupies bytes 1..4, so a 2-byte budget backs off to 1.
+        assert_eq!(truncate_to_char_boundary("a\u{2014}b", 2), "a");
+        assert_eq!(truncate_to_char_boundary("a\u{2014}b", 4), "a\u{2014}");
+    }
+
+    #[test]
+    fn test_table_signature_truncates_on_char_boundary() {
+        let header = line_straddling_limit("| ", 60, " tail |");
+        let source = format!("{header}\n|---|\n| cell |\n");
+        assert_truncated_signature(&source, "pipe_table", 60);
+    }
+
+    #[test]
+    fn test_list_signature_truncates_on_char_boundary() {
+        let item = line_straddling_limit("- ", 50, " tail");
+        let source = format!("{item}\n- second\n");
+        assert_truncated_signature(&source, "list", 50);
+    }
+
+    #[test]
+    fn test_blockquote_signature_truncates_on_char_boundary() {
+        let quote = line_straddling_limit("> ", 60, " tail");
+        let source = format!("{quote}\n");
+        assert_truncated_signature(&source, "block_quote", 60);
+    }
+
+    #[test]
+    fn test_link_reference_signature_truncates_on_char_boundary() {
+        let reference = line_straddling_limit("[label]: http://example.com \"", 50, " tail\"");
+        let source = format!("{reference}\n\n[label]\n");
+        assert_truncated_signature(&source, "link_reference_definition", 50);
     }
 }
