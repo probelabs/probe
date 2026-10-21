@@ -198,6 +198,17 @@ fn handle_search(params: SearchParams) -> Result<()> {
     // Normalize the search root early. Some downstream code paths are stricter about absolute paths.
     let raw_root = params.paths.first().unwrap();
 
+    // Refuse to search inside directories that should always be ignored,
+    // checking the original path before symlink resolution.
+    if probe_code::search::file_list_cache::path_contains_ignored_component(raw_root) {
+        if params.format == "json" || params.format == "xml" {
+            println!("[]");
+        } else {
+            println!("Search path contains an ignored directory component. No results.");
+        }
+        return Ok(());
+    }
+
     // Use safe path operations to avoid following symlinks/junctions
     use probe_code::path_safety;
 

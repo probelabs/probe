@@ -137,6 +137,29 @@ pub fn get_file_list(
     Ok(file_list)
 }
 
+/// Directory names that should never be searched, even when targeted directly.
+pub const IGNORED_DIR_NAMES: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".svn",
+    ".hg",
+    ".visor",
+    "__pycache__",
+];
+
+/// Returns `true` if any component of `path` is a directory name that should
+/// never be searched (e.g. `.visor`, `node_modules`, `.git`).
+pub fn path_contains_ignored_component(path: &Path) -> bool {
+    path.components().any(|c| {
+        if let std::path::Component::Normal(name) = c {
+            let name_str = name.to_string_lossy();
+            IGNORED_DIR_NAMES.iter().any(|ignored| *ignored == name_str.as_ref())
+        } else {
+            false
+        }
+    })
+}
+
 /// Build a list of files in a directory, respecting ignore patterns and test file exclusions.
 fn build_file_list(
     path: &Path,
@@ -149,6 +172,16 @@ fn build_file_list(
 
     if debug_mode {
         println!("DEBUG: Building file list for path: {path:?}");
+    }
+
+    if path_contains_ignored_component(path) {
+        if debug_mode {
+            println!("DEBUG: Refusing to search inside ignored directory: {path:?}");
+        }
+        return Ok(FileList {
+            files: Vec::new(),
+            created_at: Instant::now(),
+        });
     }
 
     // Create a WalkBuilder that respects .gitignore files and common ignore patterns
@@ -201,6 +234,7 @@ fn build_file_list(
         ".git",
         ".svn",
         ".hg",
+        ".visor",
         ".idea",
         ".vscode",
         "__pycache__",
