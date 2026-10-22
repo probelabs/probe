@@ -105,54 +105,25 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
         mcpConfigPath,
         session,
         debug,
-        prompt: finalPrompt,  // Use finalPrompt which may include schema
         allowedTools: allowedTools || opts.allowedTools  // Support tool filtering
       });
 
       if (debug) {
         console.log('[DEBUG] Executing: claude', args.join(' '));
-      }
-
-      // CRITICAL: Claude Code requires echo pipe to work when spawned from Node.js
-      // Without it, the process hangs indefinitely waiting for stdin
-      // This has been tested extensively - see CLAUDE_CLI_ECHO_REQUIREMENT.md
-      // DO NOT REMOVE THE echo "" | PREFIX
-      // SECURITY: Shell argument escaping using POSIX single-quote method
-      // Single quotes in POSIX shells protect ALL metacharacters (;|&$`><*?) except single quote itself
-      // The pattern 'text'\''more' correctly handles embedded quotes by:
-      // 1. Closing the current quote with '
-      // 2. Adding an escaped quote \'
-      // 3. Opening a new quote with '
-      // This is the standard POSIX-compliant method and is completely safe against injection
-      const shellCmd = `echo "" | claude ${args.map(arg => {
-        // Validate arg is a string (paranoid check)
-        if (typeof arg !== 'string') {
-          throw new TypeError(`Invalid argument type: expected string, got ${typeof arg}`);
-        }
-        // Escape single quotes using POSIX method: ' -> '\''
-        const escaped = arg.replace(/'/g, "'\\''");
-        // Wrap in single quotes for complete shell metacharacter protection
-        return `'${escaped}'`;
-      }).join(' ')}`;
-
-      if (debug) {
-        console.log('[DEBUG] Shell command length:', shellCmd.length);
-        // Don't log full command if too long (e.g. system prompt)
-        if (shellCmd.length < 500) {
-          console.log('[DEBUG] Shell command:', shellCmd);
-        } else {
-          console.log('[DEBUG] Shell command (truncated):', shellCmd.substring(0, 200) + '...');
-        }
+        console.log('[DEBUG] Prompt bytes (sent on stdin):', Buffer.byteLength(finalPrompt, 'utf8'));
       }
 
       // Initialize tool collector for batch emission
       const toolCollector = [];
 
-      // Spawn using shell wrapper with echo pipe
-      const proc = spawn('sh', ['-c', shellCmd], {
-        env: { ...process.env, FORCE_COLOR: '0' },
-        stdio: ['ignore', 'pipe', 'pipe']  // Ignore stdin since echo handles it
-      });
+      // Spawn `claude` directly with an argv array (no `sh -c`, no shell
+      // escaping) and deliver the prompt on stdin. The prompt used to be a
+      // positional argument inside an `echo "" | claude ...` shell string, so a
+      // large prompt overflowed ARG_MAX (MAX_ARG_STRLEN on Linux) and the spawn
+      // failed with E2BIG. `claude -p` reads its prompt from stdin when no
+      // positional prompt is given, and closing stdin after writing also keeps
+      // the CLI from waiting on an open stdin (the reason for the old echo pipe).
+      const { proc } = spawnClaude(args, finalPrompt, { debug });
 
       // Subprocess timeout handling
       let killed = false;
@@ -258,6 +229,10 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
           clearTimeout(sigkillHandle);
         }
         processEnded = true;
+        if (error && error.code === 'ENOENT') {
+          emitter.emit('error', new Error('Claude Code not found. Please install it first.'));
+          return;
+        }
         emitter.emit('error', error);
       });
 
@@ -534,10 +509,9 @@ function processJsonBuffer(buffer, emitter, session, debug, toolCollector = null
 /**
  * Build claude command arguments
  */
-function buildClaudeArgs({ systemPrompt, mcpConfigPath, session, debug, prompt, allowedTools }) {
+export function buildClaudeArgs({ systemPrompt, mcpConfigPath, session, debug, allowedTools }) {
   const args = [
-    '-p',  // Short form of --print
-    prompt,  // The prompt text goes right after -p
+    '-p',  // Short form of --print; the prompt itself is written to stdin
     '--output-format', 'json'
   ];
 
@@ -574,6 +548,46 @@ function buildClaudeArgs({ systemPrompt, mcpConfigPath, session, debug, prompt, 
   }
 
   return args;
+}
+
+/**
+ * Spawn the Claude Code CLI with an argv array and write the prompt to stdin.
+ *
+ * Exported for tests. Never throws on a broken stdin pipe: if `claude` exits
+ * (or fails to start) before reading the whole prompt, the resulting EPIPE /
+ * ERR_STREAM_DESTROYED is swallowed here and the process `close`/`error`
+ * events carry the outcome as before.
+ *
+ * @param {string[]} args - claude CLI arguments (see buildClaudeArgs)
+ * @param {string} prompt - prompt text delivered on stdin
+ * @param {{debug?: boolean, command?: string, env?: object}} [options]
+ */
+export function spawnClaude(args, prompt, { debug = false, command = 'claude', env } = {}) {
+  for (const arg of args) {
+    if (typeof arg !== 'string') {
+      throw new TypeError(`Invalid argument type: expected string, got ${typeof arg}`);
+    }
+  }
+
+  const proc = spawn(command, args, {
+    env: env || { ...process.env, FORCE_COLOR: '0' },
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+
+  const result = { proc, stdinError: null };
+
+  proc.stdin.on('error', (error) => {
+    // EPIPE / ERR_STREAM_DESTROYED: the child exited or never started before
+    // consuming stdin. Not fatal on its own; exit code / spawn error decide.
+    result.stdinError = error;
+    if (debug) {
+      console.log('[DEBUG] Claude stdin closed early:', error.code || error.message);
+    }
+  });
+
+  proc.stdin.end(typeof prompt === 'string' ? prompt : String(prompt ?? ''));
+
+  return result;
 }
 
 /**
