@@ -13,6 +13,8 @@
 
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import { spawn } from 'child_process';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
 import { createHash } from 'crypto';
 import { mkdtemp, writeFile, chmod, readFile, unlink, rmdir, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -21,18 +23,33 @@ import { join } from 'path';
 import {
   createEnhancedClaudeCLIEngine,
   buildClaudeArgs,
-  spawnClaude
+  spawnClaude,
+  resolveClaudeLaunch,
+  buildClaudeSpawn,
+  quoteCmdArg,
+  CLAUDE_MAX_STDIN_CHARS
 } from '../../src/agent/engines/enhanced-claude-code.js';
 
 const FAKE_CLAUDE = `#!/usr/bin/env node
 const fs = require('fs');
 const argsFile = process.env.FAKE_CLAUDE_ARGS;
-fs.writeFileSync(argsFile, JSON.stringify({
-  argv: process.argv.slice(2),
-  forceColor: process.env.FORCE_COLOR
-}));
+const argv = process.argv.slice(2);
+const spIdx = argv.indexOf('--system-prompt-file');
+let systemPromptFile = null;
+if (spIdx !== -1) {
+  const file = argv[spIdx + 1];
+  const content = fs.readFileSync(file);
+  systemPromptFile = {
+    path: file,
+    mode: (fs.statSync(file).mode & 0o777).toString(8),
+    sha256: require('crypto').createHash('sha256').update(content).digest('hex')
+  };
+}
+fs.writeFileSync(argsFile, JSON.stringify({ argv, forceColor: process.env.FORCE_COLOR, systemPromptFile }));
 if (process.env.FAKE_CLAUDE_EXIT_EARLY === '1') {
-  // Exit without reading stdin: the parent's write hits EPIPE.
+  // Exit without reading stdin (the parent's write hits EPIPE), the way
+  // Claude Code fails on oversized stdin.
+  process.stderr.write('Error: piped stdin input exceeds 10MB. Pass large content as a file path in your prompt instead.\\n');
   process.exit(3);
 }
 const chunks = [];
@@ -208,7 +225,7 @@ describe('enhanced Claude Code engine: prompt on stdin', () => {
     expect(JSON.parse(result.out.trim()).result).toBe(`fake-ok bytes=${Buffer.byteLength(prompt, 'utf8')}`);
   }, 60000);
 
-  test('claude exiting before reading stdin (EPIPE) does not raise an unhandled error', async () => {
+  test('claude exiting non-zero before reading stdin (EPIPE) yields an error chunk with the stderr tail, not an empty answer', async () => {
     useFakeClaude({ exitEarly: true });
     const engine = await createEnhancedClaudeCLIEngine({
       agent: fakeAgent(),
@@ -217,9 +234,56 @@ describe('enhanced Claude Code engine: prompt on stdin', () => {
     });
     try {
       const chunks = await collect(engine, makeLargePrompt());
-      // Non-zero exit with no output: no text, no thrown error, metadata still yielded.
+      // Non-zero exit with no output: an error chunk (so ProbeAgent.answer
+      // throws) instead of an empty "successful" answer; nothing unhandled.
       expect(chunks.filter(c => c.type === 'text')).toHaveLength(0);
-      expect(chunks.some(c => c.type === 'metadata')).toBe(true);
+      const err = chunks.find(c => c.type === 'error');
+      expect(err).toBeDefined();
+      expect(err.error.message).toContain('exited with code 3');
+      expect(err.error.message).toContain('piped stdin input exceeds 10MB');
+    } finally {
+      await engine.close();
+    }
+  }, 60000);
+
+  test('a prompt over the 10MB stdin cap is rejected before spawning', async () => {
+    useFakeClaude();
+    if (existsSync(argsFile)) await unlink(argsFile);
+    const engine = await createEnhancedClaudeCLIEngine({
+      agent: fakeAgent(),
+      systemPrompt: 'sys',
+      timeout: 60000
+    });
+    try {
+      const chunks = await collect(engine, 'y'.repeat(CLAUDE_MAX_STDIN_CHARS + 1));
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0].type).toBe('error');
+      expect(chunks[0].error.message).toContain(String(CLAUDE_MAX_STDIN_CHARS));
+      expect(existsSync(argsFile)).toBe(false); // claude was never started
+    } finally {
+      await engine.close();
+    }
+  }, 60000);
+
+  test('a large system prompt goes through a 0600 --system-prompt-file that is deleted afterwards', async () => {
+    useFakeClaude();
+    const systemPrompt = 'Rules: 100% "strict" review.\n'.repeat(8000); // ~230 KB, over Linux MAX_ARG_STRLEN
+    const engine = await createEnhancedClaudeCLIEngine({
+      agent: fakeAgent(),
+      systemPrompt,
+      timeout: 60000
+    });
+    try {
+      const chunks = await collect(engine, 'review please');
+      expect(chunks.some(c => c.type === 'error')).toBe(false);
+      const { argv, systemPromptFile } = JSON.parse(await readFile(argsFile, 'utf8'));
+      expect(argv).not.toContain('--system-prompt');
+      expect(argv.slice(0, 3)).toEqual(['-p', '--output-format', 'json']);
+      expect(argv[3]).toBe('--system-prompt-file');
+      expect(argv.join(' ').length).toBeLessThan(1024);
+      expect(systemPromptFile.mode).toBe('600');
+      expect(systemPromptFile.sha256).toBe(sha256(Buffer.from(systemPrompt, 'utf8')));
+      expect(existsSync(systemPromptFile.path)).toBe(false);
     } finally {
       await engine.close();
     }
@@ -243,4 +307,114 @@ describe('enhanced Claude Code engine: prompt on stdin', () => {
       await engine.close();
     }
   }, 60000);
+});
+
+describe('Windows launch (no shell)', () => {
+  const args = ['-p', '--output-format', 'json', '--system-prompt-file', 'C:\\Temp\\probe sys.txt',
+    '--mcp-config', 'C:\\Temp\\probe-mcp-1.json', '--allowedTools', 'mcp__probe__*'];
+
+  const fsFrom = (files) => ({
+    fileExists: (p) => Object.prototype.hasOwnProperty.call(files, p),
+    readFile: (p) => files[p]
+  });
+
+  function mockSpawn() {
+    const calls = [];
+    const impl = (file, argv, options) => {
+      calls.push({ file, argv, options });
+      const proc = new EventEmitter();
+      proc.stdin = new PassThrough();
+      proc.stdout = new PassThrough();
+      proc.stderr = new PassThrough();
+      proc.stdinData = '';
+      proc.stdin.on('data', (d) => { proc.stdinData += d; });
+      return proc;
+    };
+    return { calls, impl };
+  }
+
+  test('prefers claude.exe on PATH and spawns it directly with the args array', () => {
+    const launch = resolveClaudeLaunch({
+      platform: 'win32',
+      env: { Path: 'C:\\Windows;C:\\Users\\me\\.local\\bin' },
+      ...fsFrom({ 'C:\\Users\\me\\.local\\bin\\claude.exe': '' })
+    });
+    const { calls, impl } = mockSpawn();
+    const { proc } = spawnClaude(args, 'prompt on stdin', { launch, spawnImpl: impl });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].file).toBe('C:\\Users\\me\\.local\\bin\\claude.exe');
+    expect(calls[0].argv).toEqual(args);
+    expect(calls[0].options.shell).toBe(false);
+    expect(calls[0].options.windowsVerbatimArguments).toBeUndefined();
+    expect(calls[0].options.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+    expect(calls[0].options.env.FORCE_COLOR).toBe('0');
+    expect(proc.stdinData).toBe('prompt on stdin');
+  });
+
+  test('for the npm claude.cmd shim, runs node on the package bin entry with the same args (no shell)', () => {
+    const prefix = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+    const pkg = `${prefix}\\node_modules\\@anthropic-ai\\claude-code`;
+    const launch = resolveClaudeLaunch({
+      platform: 'win32',
+      env: { PATH: `C:\\Windows;${prefix}` },
+      execPath: 'C:\\Program Files\\nodejs\\node.exe',
+      ...fsFrom({
+        [`${prefix}\\claude`]: '',
+        [`${prefix}\\claude.cmd`]: '',
+        [`${pkg}\\package.json`]: JSON.stringify({ bin: { claude: 'cli.js' } }),
+        [`${pkg}\\cli.js`]: ''
+      })
+    });
+    const spawned = buildClaudeSpawn(launch, args);
+    expect(spawned.file).toBe('C:\\Program Files\\nodejs\\node.exe');
+    expect(spawned.argv).toEqual([`${pkg}\\cli.js`, ...args]);
+    expect(spawned.options.shell).toBe(false);
+    expect(launch.viaCmd).toBe(false);
+  });
+
+  test('for a claude.cmd shim whose package bin is the native bin/claude.exe (2.1.x), spawns that exe directly', () => {
+    const prefix = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+    const pkg = `${prefix}\\node_modules\\@anthropic-ai\\claude-code`;
+    const launch = resolveClaudeLaunch({
+      platform: 'win32',
+      env: { PATH: prefix },
+      ...fsFrom({
+        [`${prefix}\\claude.cmd`]: '',
+        [`${pkg}\\package.json`]: JSON.stringify({ bin: { claude: 'bin/claude.exe' } }),
+        [`${pkg}\\bin\\claude.exe`]: ''
+      })
+    });
+    const spawned = buildClaudeSpawn(launch, args);
+    expect(spawned.file).toBe(`${pkg}\\bin\\claude.exe`);
+    expect(spawned.argv).toEqual(args);
+    expect(spawned.options.shell).toBe(false);
+  });
+
+  test('when only claude.cmd resolves, uses cmd.exe /d /s /c with verbatim, escaped arguments', () => {
+    const prefix = 'C:\\tools\\npm';
+    const launch = resolveClaudeLaunch({
+      platform: 'win32',
+      env: { PATH: prefix, ComSpec: 'C:\\Windows\\system32\\cmd.exe' },
+      ...fsFrom({ [`${prefix}\\claude.cmd`]: '' })
+    });
+    expect(launch.viaCmd).toBe(true);
+    const spawned = buildClaudeSpawn(launch, ['-p', '--allowedTools', 'a&b', '100% "x"']);
+    expect(spawned.file).toBe('C:\\Windows\\system32\\cmd.exe');
+    expect(spawned.argv.slice(0, 3)).toEqual(['/d', '/s', '/c']);
+    expect(spawned.options).toEqual({ shell: false, windowsVerbatimArguments: true, windowsHide: true });
+    const line = spawned.argv[3];
+    expect(line.startsWith('"C:\\tools\\npm\\claude.cmd ')).toBe(true);
+    // & and % are ^-escaped (twice, for cmd.exe and the batch re-parse)
+    expect(line).toContain('a^^^&b');
+    expect(line).toContain('100^^^%');
+    expect(line).not.toMatch(/[^^]&/);
+    // newlines can never reach the cmd.exe command line
+    expect(() => quoteCmdArg('line1\nline2')).toThrow(/newline/);
+  });
+
+  test('reports nothing found (null) only after the PATH lookup misses', () => {
+    expect(resolveClaudeLaunch({ platform: 'win32', env: { PATH: 'C:\\a;C:\\b' }, ...fsFrom({}) })).toBeNull();
+    expect(resolveClaudeLaunch({ platform: 'linux', env: {}, ...fsFrom({}) }))
+      .toEqual({ platform: 'linux', command: 'claude', prefixArgs: [], viaCmd: false });
+  });
 });
