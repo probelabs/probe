@@ -1,0 +1,89 @@
+id: SYS-REQ-009
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: the bert_reranker shall always satisfy model_loaded_safely & mmap_size_validated
+description: BERT reranker (optional feature) memory-mapped model loading; src/bert_reranker.rs (the only unsafe site).
+formalization_strategy: fretish
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+parent: STK-REQ-001
+component: bert_reranker
+rationale: ""
+tags:
+    - memory_safety
+    - unsafe
+variables: []
+traces:
+    verified_by_extra:
+        - src/bert_reranker.rs
+    implemented_by_extra:
+        - src/bert_reranker.rs
+verification:
+    assurance_level: E
+    formalization_status: valid
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T06:34:19Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T07:27:27Z"
+stakeholder:
+    obligation_suppressions:
+        - id: errors_propagated
+          reason: let _ = in bert_reranker is restricted to ONNX runtime telemetry sinks where backpressure is explicitly best-effort; model load errors propagate via Result.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:26Z"
+          framework_refs:
+            - CWE CWE-703,CWE-252,CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1,V7.4.2,V7.4.3
+        - id: external_call_concurrency_bounded
+          reason: Reranker is constructed once per-process; there is no outbound concurrency to a remote dependency to bound.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:27Z"
+          framework_refs:
+            - CWE CWE-410,CWE-770
+            - IEC-62443 CR-7.1
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: external_call_failure_observable
+          reason: Local model file load errors propagate via typed Result with std::io::Error context; they are not silently retried.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:27Z"
+          framework_refs:
+            - CWE CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1
+        - id: external_call_timeout_bounded
+          reason: fs::read_to_string in bert_reranker reads only local model config files at startup; no network/RPC boundary is crossed and call duration is bounded by local IO.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:27Z"
+          framework_refs:
+            - CWE CWE-1088,CWE-400
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: panic_free_input_handling
+          reason: Slice indexing in bert_reranker is on tokenized input bounded by the configured max_seq_len validated upstream; out-of-bounds is structurally unreachable. Model file mmap dereference is gated on size validation per SYS-REQ-013.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:26Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1
+        - id: upstream_budget_coordinated
+          reason: Reranker has no upstream budget; it is invoked synchronously by the search pipeline whose own budget governs total time.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:27Z"
+          framework_refs:
+            - CWE CWE-1088
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4

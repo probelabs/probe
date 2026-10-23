@@ -1,0 +1,605 @@
+
+Requirements: 10 total
+
+  ━━━ SPECIFICATION ━━━
+    ⚠ stakeholder_acceptance_criteria 1 acceptance criteria issues in 1 stakeholder reqs  (0ms)
+      STK-REQ-001
+    ✓ interface_contract_duplicates  0 duplicate interface contracts  (0ms)
+    ✓ interface_coverage             all 0 interfaces covered  (0ms)
+    ✓ cross_component_clean          0 cross-component reqs fully covered  (0ms)
+    ✓ variable_orphans_clean         0 variable model issues  (0ms)
+    ✓ stakeholder_requirements_exist 1 stakeholder requirements found  (0ms)
+    ✓ circular_deps_clean            0 circular dependencies  (0ms)
+    ✗ l0_stakeholder_complete        3 L0 stakeholder completeness issues in 1 STK-REQs  (0ms)
+      STK-REQ-001:persona
+      STK-REQ-001:story
+      STK-REQ-001:acceptance_criteria
+    ✓ l2_software_complete           no software/integration requirements to check  (0ms)
+    ✓ catalog_version_pinned         catalog version 1.0.0 in use; no pin configured (set project.catalog.version in proof.yaml for auditor-stable upgrades)  (0ms)
+    ⚠ quality_clean                  9 quality issues (9 missing rationale, 0 missing description, 0 empty FRETish, 0 stale draft, 0 high churn)  (0ms)
+      missing_rationale:SYS-REQ-001
+      missing_rationale:SYS-REQ-002
+      missing_rationale:SYS-REQ-003
+      missing_rationale:SYS-REQ-004
+      missing_rationale:SYS-REQ-005
+      missing_rationale:SYS-REQ-006
+      missing_rationale:SYS-REQ-007
+      missing_rationale:SYS-REQ-008
+      missing_rationale:SYS-REQ-009
+    ✓ gaps_clean                     0 unconstrained outputs  (0ms)
+    ✗ variables_declared             20 solver preflight errors across 10 formalized components  (9ms)
+      specs/stakeholder/probe:STK-REQ-001:variable
+      specs/stakeholder/probe:STK-REQ-001:variable
+      specs/system/bert_reranker:SYS-REQ-009:variable
+      specs/system/bert_reranker:SYS-REQ-009:variable
+      specs/system/concurrent_search:SYS-REQ-007:variable
+      specs/system/concurrent_search:SYS-REQ-007:variable
+      specs/system/config_loader:SYS-REQ-008:variable
+      specs/system/config_loader:SYS-REQ-008:variable
+      specs/system/fs_traversal:SYS-REQ-003:variable
+      specs/system/fs_traversal:SYS-REQ-003:variable
+      specs/system/lsp_daemon:SYS-REQ-002:variable
+      specs/system/lsp_daemon:SYS-REQ-002:variable
+      specs/system/search_engine:SYS-REQ-001:variable
+      specs/system/search_engine:SYS-REQ-001:variable
+      specs/system/subprocess_runner:SYS-REQ-004:variable
+      specs/system/subprocess_runner:SYS-REQ-004:variable
+      specs/system/symbol_cache:SYS-REQ-006:variable
+      specs/system/symbol_cache:SYS-REQ-006:variable
+      specs/system/tree_sitter_parser:SYS-REQ-005:variable
+      specs/system/tree_sitter_parser:SYS-REQ-005:variable
+    ✓ obligation_completeness        no stakeholder obligation checklists declared  (0ms)
+    ✓ levels_connected               all 2 spec levels connected (L0:1, L1:9, L2:0)  (0ms)
+    ✓ approvals_current              approval policy disabled  (0ms)
+    ✓ deletion_without_retirement    no baseline available, skipping  (0ms)
+    ⚠ obligation_baseline            16 unresolved baseline obligation(s) across 3 requirement(s)  (0ms)
+      SYS-REQ-001
+      SYS-REQ-003
+      SYS-REQ-005
+    ✓ obligation_suppression_rationale no obligation suppressions declared  (1ms)
+    ✓ obligation_suppression_reviewer no obligation suppressions at or above reviewer-required severity  (1ms)
+    ✓ spec_lint_ac_subset_of_satisfies lint-ac-subset-of-satisfies: no issues found  (1ms)
+    ✓ spec_lint_parent_field_vs_satisfies lint-parent-field-vs-satisfies: no issues found  (2ms)
+    ✓ spec_lint_auto_modifier_without_human lint-auto-modifier-without-human: no issues found  (2ms)
+    ✓ spec_lint_status_vs_review     lint-status-vs-review: no issues found  (1ms)
+    ✓ spec_lint_req_type_vs_description lint-req-type-vs-description: no issues found  (1ms)
+    ✓ spec_lint_numbering_gaps_has_tombstone lint-numbering-gaps-has-tombstone: no issues found  (2ms)
+    ⚠ spec_lint_obligation_checklist_empty lint-obligation-checklist-empty: 1 issue(s)  (3ms)
+      STK-REQ-001:obligation_checklist
+    ✓ spec_lint_yaml_escape_artefact lint-yaml-escape-artefact: no issues found  (2ms)
+    ✓ validate_passes                10/10 valid  (23ms)
+    ✓ spec_lint_hallucinated_symbols lint-hallucinated-symbols: no issues found  (10ms)
+    ✗ system_requirements_linked     9/9 system requirements not linked to stakeholder  (36ms)
+      SYS-REQ-001
+      SYS-REQ-002
+      SYS-REQ-003
+      SYS-REQ-004
+      SYS-REQ-005
+      SYS-REQ-006
+      SYS-REQ-007
+      SYS-REQ-008
+      SYS-REQ-009
+    ✗ l1_system_complete             9 L1 system completeness errors in 9 SYS-REQs  (50ms)
+      SYS-REQ-001:satisfies
+      SYS-REQ-002:satisfies
+      SYS-REQ-003:satisfies
+      SYS-REQ-004:satisfies
+      SYS-REQ-005:satisfies
+      SYS-REQ-006:satisfies
+      SYS-REQ-007:satisfies
+      SYS-REQ-008:satisfies
+      SYS-REQ-009:satisfies
+    ✓ changed_requirements_reviewed  changed requirement review skipped (no git diff context)  (77ms)
+    ✓ system_formalization_complete  all 9 SYS-REQs formalized in FRETish  (111ms)
+
+  ━━━ IMPLEMENTATION ━━━
+    ⚠ build_passes                   build command not configured in project.commands.build  (0ms)
+      Add project.commands.build to proof.yaml to enable the build gate for this project.
+    ⚠ tests_pass                     test command not configured in project.commands  (0ms)
+      Add project.commands.tests or project.commands.test to proof.yaml to enable the test gate for this project.
+    − code_mcdc_measure              code-level MC/DC measurement has no enabled targets  (0ms)
+    − slow_tests_clean               slow-test audit not configured  (0ms)
+    ⚠ lint_clean                     6741 untraced functions  (2ms)
+      benches/parsing_benchmarks.rs:8 create_temp_file
+      benches/parsing_benchmarks.rs:16 get_sample_code
+      benches/parsing_benchmarks.rs:221 benchmark_language_parsing
+      benches/parsing_benchmarks.rs:261 benchmark_file_sizes
+      benches/parsing_benchmarks.rs:297 benchmark_line_filtering
+      ... and 6736 more
+    ✓ contract_alignment_clean       public command surfaces have aligned requirement/help/test coverage  (0ms)
+    ⚠ authored_delta_expected        17 traced production implementation files lacked current no-authored-change review  (61ms)
+      SYS-REQ-001
+      SYS-REQ-002
+      SYS-REQ-003
+      SYS-REQ-004
+      SYS-REQ-005
+      SYS-REQ-006
+      SYS-REQ-007
+      SYS-REQ-008
+      SYS-REQ-009
+    ✓ autolink_clean                 0 autolink errors  (975ms)
+    ⚠ orphan_tests_clean             1927 test functions scanned, 1927 orphans found (no // Verifies: annotation)  (1ms)
+      examples/chat/test-agentic-image-loading.js:175 testAgenticImageLoading
+      examples/chat/test-chat-tracing.js:4 testChatTracing
+      examples/chat/test-direct-function.js:15 testFunction
+      examples/chat/test-file-size-validation.js:15 testFileSizeCheck
+      examples/chat/test-file-size-validation.js:33 testFileSizeValidation
+      ... and 1922 more
+    ⚠ orphan_code_clean              4814 code functions have no requirement annotation  (1ms)
+      benches/parsing_benchmarks.rs:8 create_temp_file
+      benches/parsing_benchmarks.rs:16 get_sample_code
+      benches/parsing_benchmarks.rs:221 benchmark_language_parsing
+      benches/parsing_benchmarks.rs:261 benchmark_file_sizes
+      benches/parsing_benchmarks.rs:297 benchmark_line_filtering
+      ... and 4809 more
+    ✓ annotation_validity            all referenced requirement IDs have corresponding spec files  (0ms)
+    ✓ retired_cleanup                no retired/superseded requirements  (0ms)
+    ✓ spec_lint_evidence_tag_exists  lint-evidence-tag-exists: no issues found  (0ms)
+
+  ━━━ VERIFICATION ━━━
+    − flip_fixtures_exist            disabled by project.checks policy  (0ms)
+    − fixture_staleness_clean        disabled by project.checks policy  (0ms)
+      > validate: validate: started
+      > validate: validate: 10/10 valid
+      > realize: realize: started
+      > realize specs/system/bert_reranker [0/9 done, 0 cached, 0 reverified, 1 active]: specs/system/bert_reranker: checking component
+      > realize specs/system/concurrent_search [0/9 done, 0 cached, 0 reverified, 2 active]: specs/system/concurrent_search: checking component
+      > realize specs/system/config_loader [0/9 done, 0 cached, 0 reverified, 3 active]: specs/system/config_loader: checking component
+      > realize specs/system/fs_traversal [0/9 done, 0 cached, 0 reverified, 4 active]: specs/system/fs_traversal: checking component
+      > realize specs/system/lsp_daemon [0/9 done, 0 cached, 0 reverified, 5 active]: specs/system/lsp_daemon: checking component
+      > realize specs/system/search_engine [0/9 done, 0 cached, 0 reverified, 6 active]: specs/system/search_engine: checking component
+      > realize specs/system/subprocess_runner [0/9 done, 0 cached, 0 reverified, 7 active]: specs/system/subprocess_runner: checking component
+      > realize specs/system/symbol_cache [0/9 done, 0 cached, 0 reverified, 8 active]: specs/system/symbol_cache: checking component
+      > realize specs/system/tree_sitter_parser [0/9 done, 0 cached, 0 reverified, 9 active]: specs/system/tree_sitter_parser: checking component
+      > realize specs/system/concurrent_search: specs/system/concurrent_search: running solver (no cache entry)
+      > realize specs/system/search_engine: specs/system/search_engine: running solver (no cache entry)
+      > realize specs/system/fs_traversal: specs/system/fs_traversal: running solver (no cache entry)
+      > realize specs/system/lsp_daemon: specs/system/lsp_daemon: running solver (no cache entry)
+      > realize specs/system/bert_reranker: specs/system/bert_reranker: running solver (no cache entry)
+      > realize specs/system/tree_sitter_parser: specs/system/tree_sitter_parser: running solver (no cache entry)
+      > realize specs/system/config_loader: specs/system/config_loader: running solver (no cache entry)
+      > realize specs/system/subprocess_runner: specs/system/subprocess_runner: running solver (no cache entry)
+      > realize specs/system/symbol_cache: specs/system/symbol_cache: running solver (no cache entry)
+      > realize specs/system/concurrent_search [1/9 done, 0 cached, 1 reverified, 1 failed, 8 active]: specs/system/concurrent_search: solver run failed after 16ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-007: references variable "tasks_complete" which is not declared in specs/system/concurrent_search.vars.yaml
+  SYS-REQ-007: references variable "no_data_races" which is not declared in specs/system/concurrent_search.vars.yaml
+
+Run 'proof validate --preflight specs/system concurrent_search' for details
+      > realize specs/system/search_engine [2/9 done, 0 cached, 2 reverified, 2 failed, 7 active]: specs/system/search_engine: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-001: references variable "results_ranked" which is not declared in specs/system/search_engine.vars.yaml
+  SYS-REQ-001: references variable "query_returned_within_limits" which is not declared in specs/system/search_engine.vars.yaml
+
+Run 'proof validate --preflight specs/system search_engine' for details
+      > realize specs/system/fs_traversal [3/9 done, 0 cached, 3 reverified, 3 failed, 6 active]: specs/system/fs_traversal: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-003: references variable "gitignore_respected" which is not declared in specs/system/fs_traversal.vars.yaml
+  SYS-REQ-003: references variable "path_safety_enforced" which is not declared in specs/system/fs_traversal.vars.yaml
+
+Run 'proof validate --preflight specs/system fs_traversal' for details
+      > realize specs/system/lsp_daemon [4/9 done, 0 cached, 4 reverified, 4 failed, 5 active]: specs/system/lsp_daemon: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-002: references variable "no_zombie_processes" which is not declared in specs/system/lsp_daemon.vars.yaml
+  SYS-REQ-002: references variable "server_pool_available" which is not declared in specs/system/lsp_daemon.vars.yaml
+
+Run 'proof validate --preflight specs/system lsp_daemon' for details
+      > realize specs/system/symbol_cache [5/9 done, 0 cached, 5 reverified, 5 failed, 4 active]: specs/system/symbol_cache: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-006: references variable "writes_durable" which is not declared in specs/system/symbol_cache.vars.yaml
+  SYS-REQ-006: references variable "db_schema_initialized" which is not declared in specs/system/symbol_cache.vars.yaml
+
+Run 'proof validate --preflight specs/system symbol_cache' for details
+      > realize specs/system/subprocess_runner [6/9 done, 0 cached, 6 reverified, 6 failed, 3 active]: specs/system/subprocess_runner: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-004: references variable "command_invoked_safely" which is not declared in specs/system/subprocess_runner.vars.yaml
+  SYS-REQ-004: references variable "exit_status_handled" which is not declared in specs/system/subprocess_runner.vars.yaml
+
+Run 'proof validate --preflight specs/system subprocess_runner' for details
+      > realize specs/system/tree_sitter_parser [7/9 done, 0 cached, 7 reverified, 7 failed, 2 active]: specs/system/tree_sitter_parser: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-005: references variable "tree_cached" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+  SYS-REQ-005: references variable "language_supported" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+
+Run 'proof validate --preflight specs/system tree_sitter_parser' for details
+      > realize specs/system/config_loader [8/9 done, 0 cached, 8 reverified, 8 failed, 1 active]: specs/system/config_loader: solver run failed after 18ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-008: references variable "env_loaded" which is not declared in specs/system/config_loader.vars.yaml
+  SYS-REQ-008: references variable "defaults_applied" which is not declared in specs/system/config_loader.vars.yaml
+
+Run 'proof validate --preflight specs/system config_loader' for details
+      > realize specs/system/bert_reranker [9/9 done, 0 cached, 9 reverified, 9 failed]: specs/system/bert_reranker: solver run failed after 19ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-009: references variable "model_loaded_safely" which is not declared in specs/system/bert_reranker.vars.yaml
+  SYS-REQ-009: references variable "mmap_size_validated" which is not declared in specs/system/bert_reranker.vars.yaml
+
+Run 'proof validate --preflight specs/system bert_reranker' for details
+      > realize [9/9 done, 0 cached, 9 reverified, 9 failed]: realize phase timing: component-state load 1ms
+      > realize: realize: 9 components failed during realizability checking
+      > consistency: consistency: started
+      > consistency specs/system/bert_reranker [0/9 done, 0 cached, 0 reverified, 1 active]: specs/system/bert_reranker: checking component
+      > consistency specs/system/concurrent_search [0/9 done, 0 cached, 0 reverified, 2 active]: specs/system/concurrent_search: checking component
+      > consistency specs/system/config_loader [0/9 done, 0 cached, 0 reverified, 3 active]: specs/system/config_loader: checking component
+      > consistency specs/system/fs_traversal [0/9 done, 0 cached, 0 reverified, 4 active]: specs/system/fs_traversal: checking component
+      > consistency specs/system/lsp_daemon [0/9 done, 0 cached, 0 reverified, 5 active]: specs/system/lsp_daemon: checking component
+      > consistency specs/system/search_engine [0/9 done, 0 cached, 0 reverified, 6 active]: specs/system/search_engine: checking component
+      > consistency specs/system/subprocess_runner [0/9 done, 0 cached, 0 reverified, 7 active]: specs/system/subprocess_runner: checking component
+      > consistency specs/system/symbol_cache [0/9 done, 0 cached, 0 reverified, 8 active]: specs/system/symbol_cache: checking component
+      > consistency specs/system/tree_sitter_parser [0/9 done, 0 cached, 0 reverified, 9 active]: specs/system/tree_sitter_parser: checking component
+      > consistency specs/system/bert_reranker: specs/system/bert_reranker: running solver (no cache entry)
+      > consistency specs/system/concurrent_search: specs/system/concurrent_search: running solver (no cache entry)
+      > consistency specs/system/bert_reranker [1/9 done, 0 cached, 1 reverified, 1 failed, 8 active]: specs/system/bert_reranker: solver run failed after 2ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-009: references variable "model_loaded_safely" which is not declared in specs/system/bert_reranker.vars.yaml
+  SYS-REQ-009: references variable "mmap_size_validated" which is not declared in specs/system/bert_reranker.vars.yaml
+
+Run 'proof validate --preflight specs/system bert_reranker' for details
+      > consistency specs/system/config_loader: specs/system/config_loader: running solver (no cache entry)
+      > consistency specs/system/concurrent_search [2/9 done, 0 cached, 2 reverified, 2 failed, 7 active]: specs/system/concurrent_search: solver run failed after 3ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-007: references variable "tasks_complete" which is not declared in specs/system/concurrent_search.vars.yaml
+  SYS-REQ-007: references variable "no_data_races" which is not declared in specs/system/concurrent_search.vars.yaml
+
+Run 'proof validate --preflight specs/system concurrent_search' for details
+      > consistency specs/system/fs_traversal: specs/system/fs_traversal: running solver (no cache entry)
+      > consistency specs/system/config_loader [3/9 done, 0 cached, 3 reverified, 3 failed, 6 active]: specs/system/config_loader: solver run failed after 4ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-008: references variable "env_loaded" which is not declared in specs/system/config_loader.vars.yaml
+  SYS-REQ-008: references variable "defaults_applied" which is not declared in specs/system/config_loader.vars.yaml
+
+Run 'proof validate --preflight specs/system config_loader' for details
+      > consistency specs/system/lsp_daemon: specs/system/lsp_daemon: running solver (no cache entry)
+      > consistency specs/system/fs_traversal [4/9 done, 0 cached, 4 reverified, 4 failed, 5 active]: specs/system/fs_traversal: solver run failed after 5ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-003: references variable "gitignore_respected" which is not declared in specs/system/fs_traversal.vars.yaml
+  SYS-REQ-003: references variable "path_safety_enforced" which is not declared in specs/system/fs_traversal.vars.yaml
+
+Run 'proof validate --preflight specs/system fs_traversal' for details
+      > consistency specs/system/search_engine: specs/system/search_engine: running solver (no cache entry)
+      > consistency specs/system/lsp_daemon [5/9 done, 0 cached, 5 reverified, 5 failed, 4 active]: specs/system/lsp_daemon: solver run failed after 6ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-002: references variable "no_zombie_processes" which is not declared in specs/system/lsp_daemon.vars.yaml
+  SYS-REQ-002: references variable "server_pool_available" which is not declared in specs/system/lsp_daemon.vars.yaml
+
+Run 'proof validate --preflight specs/system lsp_daemon' for details
+      > consistency specs/system/subprocess_runner: specs/system/subprocess_runner: running solver (no cache entry)
+      > consistency specs/system/search_engine [6/9 done, 0 cached, 6 reverified, 6 failed, 3 active]: specs/system/search_engine: solver run failed after 8ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-001: references variable "results_ranked" which is not declared in specs/system/search_engine.vars.yaml
+  SYS-REQ-001: references variable "query_returned_within_limits" which is not declared in specs/system/search_engine.vars.yaml
+
+Run 'proof validate --preflight specs/system search_engine' for details
+      > consistency specs/system/symbol_cache: specs/system/symbol_cache: running solver (no cache entry)
+      > consistency specs/system/subprocess_runner [7/9 done, 0 cached, 7 reverified, 7 failed, 2 active]: specs/system/subprocess_runner: solver run failed after 8ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-004: references variable "command_invoked_safely" which is not declared in specs/system/subprocess_runner.vars.yaml
+  SYS-REQ-004: references variable "exit_status_handled" which is not declared in specs/system/subprocess_runner.vars.yaml
+
+Run 'proof validate --preflight specs/system subprocess_runner' for details
+      > consistency specs/system/tree_sitter_parser: specs/system/tree_sitter_parser: running solver (no cache entry)
+      > consistency specs/system/symbol_cache [8/9 done, 0 cached, 8 reverified, 8 failed, 1 active]: specs/system/symbol_cache: solver run failed after 9ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-006: references variable "db_schema_initialized" which is not declared in specs/system/symbol_cache.vars.yaml
+  SYS-REQ-006: references variable "writes_durable" which is not declared in specs/system/symbol_cache.vars.yaml
+
+Run 'proof validate --preflight specs/system symbol_cache' for details
+      > consistency specs/system/tree_sitter_parser [9/9 done, 0 cached, 9 reverified, 9 failed]: specs/system/tree_sitter_parser: solver run failed after 10ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-005: references variable "tree_cached" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+  SYS-REQ-005: references variable "language_supported" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+
+Run 'proof validate --preflight specs/system tree_sitter_parser' for details
+      > consistency [9/9 done, 0 cached, 9 reverified, 9 failed]: consistency phase timing: component-state load 1ms
+      > consistency: consistency: 9 components failed during consistency checking
+      > vacuity: vacuity: started
+      > vacuity specs/stakeholder/probe [0/10 done, 0 cached, 0 reverified, 1 active]: specs/stakeholder/probe: checking component
+      > vacuity specs/stakeholder/probe [1/10 done, 1 cached, 0 reverified]: specs/stakeholder/probe: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      > vacuity specs/system/bert_reranker [1/10 done, 1 cached, 0 reverified, 1 active]: specs/system/bert_reranker: checking component
+      > vacuity specs/system/bert_reranker [2/10 done, 2 cached, 0 reverified]: specs/system/bert_reranker: reused verify cache (cache fingerprint match, vacuous=0/1, 2ms)
+      > vacuity specs/system/concurrent_search [2/10 done, 2 cached, 0 reverified, 1 active]: specs/system/concurrent_search: checking component
+      > vacuity specs/system/concurrent_search [3/10 done, 3 cached, 0 reverified]: specs/system/concurrent_search: reused verify cache (cache fingerprint match, vacuous=0/1, 2ms)
+      > vacuity specs/system/config_loader [3/10 done, 3 cached, 0 reverified, 1 active]: specs/system/config_loader: checking component
+      > vacuity specs/system/config_loader [4/10 done, 4 cached, 0 reverified]: specs/system/config_loader: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      > vacuity specs/system/fs_traversal [4/10 done, 4 cached, 0 reverified, 1 active]: specs/system/fs_traversal: checking component
+      > vacuity specs/system/fs_traversal [5/10 done, 5 cached, 0 reverified]: specs/system/fs_traversal: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      > vacuity specs/system/lsp_daemon [5/10 done, 5 cached, 0 reverified, 1 active]: specs/system/lsp_daemon: checking component
+      > vacuity specs/system/lsp_daemon [6/10 done, 6 cached, 0 reverified]: specs/system/lsp_daemon: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      > vacuity specs/system/search_engine [6/10 done, 6 cached, 0 reverified, 1 active]: specs/system/search_engine: checking component
+      > vacuity specs/system/search_engine [7/10 done, 7 cached, 0 reverified]: specs/system/search_engine: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      > vacuity specs/system/subprocess_runner [7/10 done, 7 cached, 0 reverified, 1 active]: specs/system/subprocess_runner: checking component
+      > vacuity specs/system/subprocess_runner [8/10 done, 8 cached, 0 reverified]: specs/system/subprocess_runner: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      > vacuity specs/system/symbol_cache [8/10 done, 8 cached, 0 reverified, 1 active]: specs/system/symbol_cache: checking component
+      > vacuity specs/system/symbol_cache [9/10 done, 9 cached, 0 reverified]: specs/system/symbol_cache: reused verify cache (cache fingerprint match, vacuous=0/1, 2ms)
+      > vacuity specs/system/tree_sitter_parser [9/10 done, 9 cached, 0 reverified, 1 active]: specs/system/tree_sitter_parser: checking component
+      > vacuity specs/system/tree_sitter_parser [10/10 done, 10 cached, 0 reverified]: specs/system/tree_sitter_parser: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      > vacuity [10/10 done, 10 cached, 0 reverified]: vacuity diagnostics: 10 cached, 0 reverified, 0 failed; slowest slices: specs/stakeholder/probe 1ms [cache], specs/system/bert_reranker 1ms [cache], specs/system/concurrent_search 1ms [cache]
+      > vacuity [10/10 done, 10 cached, 0 reverified]: vacuity phase timing: component-state load 1ms, cache reconcile 10ms, status backfill 10ms
+      > vacuity: vacuity: 0 vacuous across 10 requirements in 10 components (10 cached, 0 reverified)
+      > gaps: gaps: started
+      > gaps: gaps: 0 unconstrained outputs
+      > lint: lint: started
+      > lint: lint: 6741 untraced functions
+      > testlink: testlink: started
+      > testlink: testlink: no --test-results file provided
+      > coverlink: coverlink: started
+      > coverlink: coverlink: no --coverage-report file provided
+      > suspect: suspect: started
+      > suspect: suspect: skipped (skipped by --skip flag)
+    ✗ verify_passes                  verify: 2 failing steps, 1 warning step  (1498ms)
+      realize: 9 components failed during realizability checking
+      realize: specs/system/bert_reranker: no persisted component verification state (no cache entry)
+      realize: specs/system/concurrent_search: no persisted component verification state (no cache entry)
+      realize: specs/system/config_loader: no persisted component verification state (no cache entry)
+      realize: specs/system/fs_traversal: no persisted component verification state (no cache entry)
+      realize: specs/system/lsp_daemon: no persisted component verification state (no cache entry)
+      realize: specs/system/search_engine: no persisted component verification state (no cache entry)
+      realize: specs/system/subprocess_runner: no persisted component verification state (no cache entry)
+      realize: specs/system/symbol_cache: no persisted component verification state (no cache entry)
+      realize: specs/system/tree_sitter_parser: no persisted component verification state (no cache entry)
+      realize: specs/system/concurrent_search: solver run failed after 16ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-007: references variable "tasks_complete" which is not declared in specs/system/concurrent_search.vars.yaml
+  SYS-REQ-007: references variable "no_data_races" which is not declared in specs/system/concurrent_search.vars.yaml
+
+Run 'proof validate --preflight specs/system concurrent_search' for details
+      realize: specs/system/search_engine: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-001: references variable "results_ranked" which is not declared in specs/system/search_engine.vars.yaml
+  SYS-REQ-001: references variable "query_returned_within_limits" which is not declared in specs/system/search_engine.vars.yaml
+
+Run 'proof validate --preflight specs/system search_engine' for details
+      realize: specs/system/fs_traversal: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-003: references variable "gitignore_respected" which is not declared in specs/system/fs_traversal.vars.yaml
+  SYS-REQ-003: references variable "path_safety_enforced" which is not declared in specs/system/fs_traversal.vars.yaml
+
+Run 'proof validate --preflight specs/system fs_traversal' for details
+      realize: specs/system/lsp_daemon: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-002: references variable "no_zombie_processes" which is not declared in specs/system/lsp_daemon.vars.yaml
+  SYS-REQ-002: references variable "server_pool_available" which is not declared in specs/system/lsp_daemon.vars.yaml
+
+Run 'proof validate --preflight specs/system lsp_daemon' for details
+      realize: specs/system/symbol_cache: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-006: references variable "writes_durable" which is not declared in specs/system/symbol_cache.vars.yaml
+  SYS-REQ-006: references variable "db_schema_initialized" which is not declared in specs/system/symbol_cache.vars.yaml
+
+Run 'proof validate --preflight specs/system symbol_cache' for details
+      realize: specs/system/subprocess_runner: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-004: references variable "command_invoked_safely" which is not declared in specs/system/subprocess_runner.vars.yaml
+  SYS-REQ-004: references variable "exit_status_handled" which is not declared in specs/system/subprocess_runner.vars.yaml
+
+Run 'proof validate --preflight specs/system subprocess_runner' for details
+      realize: specs/system/tree_sitter_parser: solver run failed after 17ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-005: references variable "tree_cached" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+  SYS-REQ-005: references variable "language_supported" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+
+Run 'proof validate --preflight specs/system tree_sitter_parser' for details
+      realize: specs/system/config_loader: solver run failed after 18ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-008: references variable "env_loaded" which is not declared in specs/system/config_loader.vars.yaml
+  SYS-REQ-008: references variable "defaults_applied" which is not declared in specs/system/config_loader.vars.yaml
+
+Run 'proof validate --preflight specs/system config_loader' for details
+      realize: specs/system/bert_reranker: solver run failed after 19ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-009: references variable "model_loaded_safely" which is not declared in specs/system/bert_reranker.vars.yaml
+  SYS-REQ-009: references variable "mmap_size_validated" which is not declared in specs/system/bert_reranker.vars.yaml
+
+Run 'proof validate --preflight specs/system bert_reranker' for details
+      realize: realize phase timing: component-state load 1ms
+      consistency: 9 components failed during consistency checking
+      consistency: specs/system/bert_reranker: no persisted component verification state (no cache entry)
+      consistency: specs/system/concurrent_search: no persisted component verification state (no cache entry)
+      consistency: specs/system/config_loader: no persisted component verification state (no cache entry)
+      consistency: specs/system/fs_traversal: no persisted component verification state (no cache entry)
+      consistency: specs/system/lsp_daemon: no persisted component verification state (no cache entry)
+      consistency: specs/system/search_engine: no persisted component verification state (no cache entry)
+      consistency: specs/system/subprocess_runner: no persisted component verification state (no cache entry)
+      consistency: specs/system/symbol_cache: no persisted component verification state (no cache entry)
+      consistency: specs/system/tree_sitter_parser: no persisted component verification state (no cache entry)
+      consistency: specs/system/bert_reranker: solver run failed after 2ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-009: references variable "model_loaded_safely" which is not declared in specs/system/bert_reranker.vars.yaml
+  SYS-REQ-009: references variable "mmap_size_validated" which is not declared in specs/system/bert_reranker.vars.yaml
+
+Run 'proof validate --preflight specs/system bert_reranker' for details
+      consistency: specs/system/concurrent_search: solver run failed after 3ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-007: references variable "tasks_complete" which is not declared in specs/system/concurrent_search.vars.yaml
+  SYS-REQ-007: references variable "no_data_races" which is not declared in specs/system/concurrent_search.vars.yaml
+
+Run 'proof validate --preflight specs/system concurrent_search' for details
+      consistency: specs/system/config_loader: solver run failed after 4ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-008: references variable "env_loaded" which is not declared in specs/system/config_loader.vars.yaml
+  SYS-REQ-008: references variable "defaults_applied" which is not declared in specs/system/config_loader.vars.yaml
+
+Run 'proof validate --preflight specs/system config_loader' for details
+      consistency: specs/system/fs_traversal: solver run failed after 5ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-003: references variable "gitignore_respected" which is not declared in specs/system/fs_traversal.vars.yaml
+  SYS-REQ-003: references variable "path_safety_enforced" which is not declared in specs/system/fs_traversal.vars.yaml
+
+Run 'proof validate --preflight specs/system fs_traversal' for details
+      consistency: specs/system/lsp_daemon: solver run failed after 6ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-002: references variable "no_zombie_processes" which is not declared in specs/system/lsp_daemon.vars.yaml
+  SYS-REQ-002: references variable "server_pool_available" which is not declared in specs/system/lsp_daemon.vars.yaml
+
+Run 'proof validate --preflight specs/system lsp_daemon' for details
+      consistency: specs/system/search_engine: solver run failed after 8ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-001: references variable "results_ranked" which is not declared in specs/system/search_engine.vars.yaml
+  SYS-REQ-001: references variable "query_returned_within_limits" which is not declared in specs/system/search_engine.vars.yaml
+
+Run 'proof validate --preflight specs/system search_engine' for details
+      consistency: specs/system/subprocess_runner: solver run failed after 8ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-004: references variable "command_invoked_safely" which is not declared in specs/system/subprocess_runner.vars.yaml
+  SYS-REQ-004: references variable "exit_status_handled" which is not declared in specs/system/subprocess_runner.vars.yaml
+
+Run 'proof validate --preflight specs/system subprocess_runner' for details
+      consistency: specs/system/symbol_cache: solver run failed after 9ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-006: references variable "db_schema_initialized" which is not declared in specs/system/symbol_cache.vars.yaml
+  SYS-REQ-006: references variable "writes_durable" which is not declared in specs/system/symbol_cache.vars.yaml
+
+Run 'proof validate --preflight specs/system symbol_cache' for details
+      consistency: specs/system/tree_sitter_parser: solver run failed after 10ms: pre-flight validation failed with 2 error(s):
+  SYS-REQ-005: references variable "tree_cached" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+  SYS-REQ-005: references variable "language_supported" which is not declared in specs/system/tree_sitter_parser.vars.yaml
+
+Run 'proof validate --preflight specs/system tree_sitter_parser' for details
+      consistency: consistency phase timing: component-state load 1ms
+      vacuity: specs/stakeholder/probe: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      vacuity: specs/system/bert_reranker: reused verify cache (cache fingerprint match, vacuous=0/1, 2ms)
+      vacuity: specs/system/concurrent_search: reused verify cache (cache fingerprint match, vacuous=0/1, 2ms)
+      vacuity: specs/system/config_loader: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      vacuity: specs/system/fs_traversal: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      vacuity: specs/system/lsp_daemon: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      vacuity: specs/system/search_engine: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      vacuity: specs/system/subprocess_runner: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      vacuity: specs/system/symbol_cache: reused verify cache (cache fingerprint match, vacuous=0/1, 2ms)
+      vacuity: specs/system/tree_sitter_parser: reused verify cache (cache fingerprint match, vacuous=0/1, 3ms)
+      vacuity: vacuity diagnostics: 10 cached, 0 reverified, 0 failed; slowest slices: specs/stakeholder/probe 1ms [cache], specs/system/bert_reranker 1ms [cache], specs/system/concurrent_search 1ms [cache]
+      vacuity: vacuity phase timing: component-state load 1ms, cache reconcile 10ms, status backfill 10ms
+      lint: 6741 untraced functions
+    ✓ solver_latency_clean           0 slow solver-backed components over 1m0s  (70ms)
+    ✓ proof_complexity_clean         all formalized components fit proof budgets (100 reqs, 100 vars, 75 guarantees)  (2ms)
+    ⚠ suspect_clean                  19 suspect links  (523ms)
+      SYS-REQ-001 -> src/ranking.rs (implemented_by)
+      SYS-REQ-001 -> src/search/mod.rs (implemented_by)
+      SYS-REQ-002 -> lsp-daemon/src/daemon.rs (implemented_by)
+      SYS-REQ-002 -> lsp-daemon/src/pool.rs (implemented_by)
+      SYS-REQ-002 -> lsp-daemon/src/server_manager.rs (implemented_by)
+      ... and 14 more
+    ✓ coverage_met                   no requirements to check  (0ms)
+    ✓ vacuity_clean                  0 vacuity findings across 10 eligible requirements  (0ms)
+    ✓ verification_chain_complete    1/1 verification chains complete  (0ms)
+    ✓ interface_staleness_clean      0 interface contracts checked, 0 stale  (0ms)
+    ⚠ decomposition_reviewed         1 incomplete decompositions (0/1 parents fully decomposed)  (0ms)
+      STK-REQ-001: STK-REQ-001 constrains variable "no_crash_on_malformed_input" but no child (SYS-REQ-001, SYS-REQ-002, SYS-REQ-003, SYS-REQ-004, SYS-REQ-005, SYS-REQ-006, SYS-REQ-007, SYS-REQ-008, SYS-REQ-009) covers it
+      STK-REQ-001: STK-REQ-001 constrains variable "semantic_search_available" but no child (SYS-REQ-001, SYS-REQ-002, SYS-REQ-003, SYS-REQ-004, SYS-REQ-005, SYS-REQ-006, SYS-REQ-007, SYS-REQ-008, SYS-REQ-009) covers it
+    ✓ ambiguity_reviewed             0 ambiguous pairs (0 pairs checked)  (0ms)
+    ✓ cross_spec_consistency_clean   0 cross-spec contradictions (0 pairs checked)  (0ms)
+    ✓ z3_properties_verified         no variables with Z3-backed properties or constraints to verify  (0ms)
+    ✓ data_constraints_complete      no variables with Z3-backed properties or constraints to verify  (0ms)
+    ✓ behavioral_implications_verified no variables with Z3-backed properties or constraints to verify  (0ms)
+    ✓ property_fixtures_exist        no components declare fixture-backed evidence -- property fixtures not applicable  (0ms)
+    ✓ description_delta_reviewed     no changed requirements in current branch  (0ms)
+    ✓ flip_test_alignment            no components declare fixture-backed evidence -- FLIP test alignment not applicable  (0ms)
+    ✓ coverage_threshold             no requirements with coverage data to check  (0ms)
+    ✓ evidence_diversity             evidence diversity policy disabled  (0ms)
+    ⚠ code_signal_obligations_reviewed 49 code signal obligation ownership finding(s)  (232ms)
+      SYS-REQ-001
+      SYS-REQ-002
+      SYS-REQ-003
+      SYS-REQ-004
+      SYS-REQ-005
+      SYS-REQ-006
+      SYS-REQ-007
+      SYS-REQ-008
+      SYS-REQ-009
+    − code_mcdc_coverage             code-level MC/DC audit has no enabled targets  (0ms)
+    ✓ under_modeled_requirements_clean no requirements look under-modeled relative to current tests or implementation  (3ms)
+      > verify mcdc_coverage: ensure fresh index: index up-to-date [33.928042ms]
+      > verify mcdc_coverage: load requirements: 0 indexed MC/DC candidates [1.597ms]
+      > verify mcdc_coverage: load fixtures: 0 requirement ids with indexed fixture metadata [375ns]
+      > verify mcdc_coverage: select eligible: 0 requirements [209ns]
+      > verify mcdc_coverage: load cache: 0/0 requirements with cached MC/DC queue metrics [1.260459ms]
+      > verify mcdc_coverage: inspect changed evidence: 0 requirements inferred from fingerprint diff [292ns]
+      > verify mcdc_coverage: validate cache: 0 valid, 0 stale (0 changed inputs, 0 missing/legacy) [625ns]
+      > verify mcdc_coverage: load stale requirements: 0 requirement(s) [125ns]
+      > verify mcdc_coverage: probe prefetch: 0 requirements, 0 matching source blocks [333ns]
+      > verify mcdc_coverage: generate tables: 0 requirements, 1 workers [15.625µs]
+      > verify mcdc_coverage: backfill cache: 0 requirement(s) [125ns]
+      > verify mcdc_coverage: summarize: 0 checked, 0 uncovered rows [500ns]
+    ✓ mcdc_coverage                  no formalized requirements with MC/DC tables to check  (36ms)
+    ✓ waivers_reviewed               no active waivers  (0ms)
+    ✓ obligation_decomposition_complete no requirements carry obligation_checklist entries  (0ms)
+
+  ━━━ DOCUMENTATION ━━━
+    ✓ srs_generates                  SRS generates successfully  (36ms)
+    ✓ srs_no_unchecked               all requirements checked  (28ms)
+    ⚠ cross_level_complete           0% cross-level coverage (0/1 stakeholder reqs satisfied)  (0ms)
+      STK-REQ-001
+    ⚠ documentation_coverage         0.0% documentation coverage (0/10 requirements have documentation)  (38ms)
+      STK-REQ-001
+      SYS-REQ-001
+      SYS-REQ-002
+      SYS-REQ-003
+      SYS-REQ-004
+      SYS-REQ-005
+      SYS-REQ-006
+      SYS-REQ-007
+      SYS-REQ-008
+      SYS-REQ-009
+
+  Errors: 5  Warnings: 15
+  Assurance: 10 components (L5: 1, L3: 9)
+  Priority fix: l0_stakeholder_complete -- 3 L0 stakeholder completeness issues in 1 STK-REQs
+  Run: proof workflow check --stage spec --verbose
+  Findings:
+    [SPECIFICATION] l0_stakeholder_complete -- 3 L0 stakeholder completeness issues in 1 STK-REQs
+      - STK-REQ-001:persona
+      - STK-REQ-001:story
+      - STK-REQ-001:acceptance_criteria
+      Run: proof workflow check --stage spec --verbose
+    [SPECIFICATION] l1_system_complete -- 9 L1 system completeness errors in 9 SYS-REQs
+      - SYS-REQ-001:satisfies
+      - SYS-REQ-002:satisfies
+      - SYS-REQ-003:satisfies
+      Run: proof workflow check --stage spec --verbose
+    [SPECIFICATION] obligation_baseline -- 16 unresolved baseline obligation(s) across 3 requirement(s)
+      - SYS-REQ-001
+      - SYS-REQ-003
+      - SYS-REQ-005
+      Run: proof workflow check --stage spec --verbose
+    [SPECIFICATION] quality_clean -- 9 quality issues (9 missing rationale, 0 missing description, 0 empty FRETish, 0 stale draft, 0 high churn)
+      - missing_rationale:SYS-REQ-001
+      - missing_rationale:SYS-REQ-002
+      - missing_rationale:SYS-REQ-003
+      Run: proof gaps specs/system --check quality --verbose
+    [SPECIFICATION] spec_lint_obligation_checklist_empty -- lint-obligation-checklist-empty: 1 issue(s)
+      - STK-REQ-001:obligation_checklist
+      Run: proof workflow check --stage spec --verbose
+    [SPECIFICATION] stakeholder_acceptance_criteria -- 1 acceptance criteria issues in 1 stakeholder reqs
+      - STK-REQ-001
+      Run: proof workflow check --stage spec --verbose
+    [SPECIFICATION] system_requirements_linked -- 9/9 system requirements not linked to stakeholder
+      - SYS-REQ-001
+      - SYS-REQ-002
+      - SYS-REQ-003
+      Run: proof workflow check --stage spec --verbose
+    [SPECIFICATION] variables_declared -- 20 solver preflight errors across 10 formalized components
+      - specs/stakeholder/probe:STK-REQ-001:variable
+      - specs/stakeholder/probe:STK-REQ-001:variable
+      - specs/system/bert_reranker:SYS-REQ-009:variable
+      Run: proof validate
+    [IMPLEMENTATION] authored_delta_expected -- 17 traced production implementation files lacked current no-authored-change review
+      - SYS-REQ-001
+      - SYS-REQ-002
+      - SYS-REQ-003
+      Run: proof workflow check --stage implement --verbose
+    [IMPLEMENTATION] build_passes -- build command not configured in project.commands.build
+      - Add project.commands.build to proof.yaml to enable the build gate for this project.
+      Run: go build ./...
+    [IMPLEMENTATION] lint_clean -- 6741 untraced functions
+      - benches/parsing_benchmarks.rs:8 create_temp_file
+      - benches/parsing_benchmarks.rs:16 get_sample_code
+      - benches/parsing_benchmarks.rs:221 benchmark_language_parsing
+      Run: proof lint
+    [IMPLEMENTATION] orphan_code_clean -- 4814 code functions have no requirement annotation
+      - benches/parsing_benchmarks.rs:8 create_temp_file
+      - benches/parsing_benchmarks.rs:16 get_sample_code
+      - benches/parsing_benchmarks.rs:221 benchmark_language_parsing
+      Run: proof workflow check --stage implement --verbose
+    [IMPLEMENTATION] orphan_tests_clean -- 1927 test functions scanned, 1927 orphans found (no // Verifies: annotation)
+      - examples/chat/test-agentic-image-loading.js:175 testAgenticImageLoading
+      - examples/chat/test-chat-tracing.js:4 testChatTracing
+      - examples/chat/test-direct-function.js:15 testFunction
+      Run: proof workflow check --stage implement --verbose
+    [IMPLEMENTATION] tests_pass -- test command not configured in project.commands
+      - Add project.commands.tests or project.commands.test to proof.yaml to enable the test gate for this project.
+      Run: go test ./pkg/... -v
+    [VERIFICATION] code_signal_obligations_reviewed -- 49 code signal obligation ownership finding(s)
+      - SYS-REQ-001
+      - SYS-REQ-002
+      - SYS-REQ-003
+      Run: proof catalog suggest --from-code --req SYS-REQ-016
+    [VERIFICATION] decomposition_reviewed -- 1 incomplete decompositions (0/1 parents fully decomposed)
+      - STK-REQ-001: STK-REQ-001 constrains variable "no_crash_on_malformed_input" but no child (SYS-REQ-001, SYS-REQ-002, SYS-REQ-003, SYS-REQ-004, SYS-REQ-005, SYS-REQ-006, SYS-REQ-007, SYS-REQ-008, SYS-REQ-009) covers it
+      - STK-REQ-001: STK-REQ-001 constrains variable "semantic_search_available" but no child (SYS-REQ-001, SYS-REQ-002, SYS-REQ-003, SYS-REQ-004, SYS-REQ-005, SYS-REQ-006, SYS-REQ-007, SYS-REQ-008, SYS-REQ-009) covers it
+      Run: proof gaps specs/system --check decomposition
+    [VERIFICATION] suspect_clean -- 19 suspect links
+      - SYS-REQ-001 -> src/ranking.rs (implemented_by)
+      - SYS-REQ-001 -> src/search/mod.rs (implemented_by)
+      - SYS-REQ-002 -> lsp-daemon/src/daemon.rs (implemented_by)
+      Run: proof trace suspect
+    [VERIFICATION] verify_passes -- verify: 2 failing steps, 1 warning step
+      - realize: 9 components failed during realizability checking
+      - realize: specs/system/bert_reranker: no persisted component verification state (no cache entry)
+      - realize: specs/system/concurrent_search: no persisted component verification state (no cache entry)
+      Run: proof verify
+    [DOCUMENTATION] cross_level_complete -- 0% cross-level coverage (0/1 stakeholder reqs satisfied)
+      - STK-REQ-001
+      Run: proof trace coverage
+    [DOCUMENTATION] documentation_coverage -- 0.0% documentation coverage (0/10 requirements have documentation)
+      - STK-REQ-001
+      - SYS-REQ-001
+      - SYS-REQ-002
+      Run: proof trace coverage
+
+Help: proof help audit
+Help: proof help <check-id>  # replace <check-id> with any check listed above
+Help: proof help l0_stakeholder_complete
+  Cache: 0 hits / 78 fresh / 58 stored (computed in 4s)
