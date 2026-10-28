@@ -20,7 +20,7 @@ export const DEFAULT_MODELS = {
 
 /**
  * Create a provider instance from a config object.
- * @param {{ provider: string, apiKey?: string, baseURL?: string, region?: string, accessKeyId?: string, secretAccessKey?: string, sessionToken?: string }} config
+ * @param {{ provider: string, apiKey?: string, baseURL?: string, headers?: Record<string, string> | (() => Record<string, string>), region?: string, accessKeyId?: string, secretAccessKey?: string, sessionToken?: string }} config
  * @returns {object} AI SDK provider instance
  */
 export function createProviderInstance(config) {
@@ -28,23 +28,24 @@ export function createProviderInstance(config) {
 		case 'anthropic':
 			return createAnthropic({
 				apiKey: config.apiKey,
-				...(config.baseURL && { baseURL: config.baseURL })
+				...(config.baseURL && { baseURL: config.baseURL }),
+				...(config.headers && { headers: config.headers })
 			});
 
 		case 'openai': {
 			if (config.baseURL) {
-				// Non-OpenAI endpoints (Fireworks, etc.) — use openai-compatible provider
-				// which correctly handles reasoning_content in streaming deltas
 				const provider = createOpenAICompatible({
 					name: 'openai-compatible',
 					baseURL: config.baseURL,
 					apiKey: config.apiKey,
+					...(config.headers && { headers: config.headers }),
 				});
 				return provider;
 			}
 			const openai = createOpenAI({
 				compatibility: 'strict',
 				apiKey: config.apiKey,
+				...(config.headers && { headers: config.headers }),
 			});
 			const chatProvider = (modelId, settings) => openai.chat(modelId, settings);
 			chatProvider.chat = openai.chat.bind(openai);
@@ -56,7 +57,8 @@ export function createProviderInstance(config) {
 		case 'google':
 			return createGoogleGenerativeAI({
 				apiKey: config.apiKey,
-				...(config.baseURL && { baseURL: config.baseURL })
+				...(config.baseURL && { baseURL: config.baseURL }),
+				...(config.headers && { headers: config.headers })
 			});
 
 		case 'bedrock': {
@@ -72,6 +74,7 @@ export function createProviderInstance(config) {
 			}
 			if (config.region) bedrockConfig.region = config.region;
 			if (config.baseURL) bedrockConfig.baseURL = config.baseURL;
+			if (config.headers) bedrockConfig.headers = config.headers;
 			return createAmazonBedrock(bedrockConfig);
 		}
 
@@ -129,16 +132,18 @@ export function resolveBaseUrl(providerName) {
  * Returns null on failure (graceful degradation for optional features).
  * @param {string} providerName - 'anthropic' | 'openai' | 'google' | 'bedrock'
  * @param {string} modelName - Model identifier (e.g., 'gemini-2.0-flash')
+ * @param {{ headers?: Record<string, string> | (() => Record<string, string>) }} [extra] - Additional provider options
  * @returns {Promise<object|null>} AI SDK model instance, or null
  */
-export async function createLanguageModel(providerName, modelName) {
+export async function createLanguageModel(providerName, modelName, extra) {
 	if (!providerName) return null;
 	const resolvedModel = modelName || DEFAULT_MODELS[providerName];
 	if (!resolvedModel) return null;
 	try {
 		const apiKey = resolveApiKey(providerName);
 		const baseURL = resolveBaseUrl(providerName);
-		const provider = createProviderInstance({ provider: providerName, ...(apiKey ? { apiKey } : {}), ...(baseURL ? { baseURL } : {}) });
+		const headers = extra?.headers;
+		const provider = createProviderInstance({ provider: providerName, ...(apiKey ? { apiKey } : {}), ...(baseURL ? { baseURL } : {}), ...(headers ? { headers } : {}) });
 		return provider(resolvedModel);
 	} catch {
 		return null;

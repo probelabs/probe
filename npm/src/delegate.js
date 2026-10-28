@@ -383,6 +383,7 @@ export async function delegate({
 	allowedFolders = null,
 	provider = null,
 	model = null,
+	providerHeaders = null,
 	enableBash = false,
 	bashConfig = null,
 	allowEdit = false,
@@ -493,6 +494,7 @@ export async function delegate({
 			cwd: path,  // Explicitly set cwd to workspace root to prevent path doubling
 			provider,   // Inherit from parent
 			model,      // Inherit from parent
+			providerHeaders, // Inherit from parent
 			enableBash, // Inherit from parent
 			bashConfig, // Inherit from parent
 			allowEdit,  // Inherit from parent
