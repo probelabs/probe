@@ -66,6 +66,8 @@ export interface ProbeAgentOptions {
   provider?: 'anthropic' | 'openai' | 'google' | 'bedrock' | 'codex';
   /** Override model name */
   model?: string;
+  /** Custom HTTP headers added to all AI provider requests (e.g., for gateway routing/tracing). Supports static object or a function returning headers. */
+  providerHeaders?: Record<string, string> | (() => Record<string, string>);
   /** Enable debug mode */
   debug?: boolean;
   /** Optional telemetry tracer instance */

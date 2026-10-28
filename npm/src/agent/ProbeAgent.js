@@ -491,6 +491,7 @@ export class ProbeAgent {
     this.clientApiModel = options.model || null;
     this.clientApiKey = null; // Will be set from environment
     this.clientApiUrl = null;
+    this.providerHeaders = options.providerHeaders || null;
 
     // Initialize token counter
     this.tokenCounter = new TokenCounter();
@@ -1056,6 +1057,7 @@ export class ProbeAgent {
       architectureFileName: this.architectureFileName,
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      providerHeaders: this.providerHeaders,
       searchDelegateProvider: this.searchDelegateProvider,
       searchDelegateModel: this.searchDelegateModel,
       delegationManager: this.delegationManager,  // Per-instance delegation limits
@@ -1402,11 +1404,18 @@ export class ProbeAgent {
       return;
     }
 
+    // Helper: inject providerHeaders into each fallback provider config
+    const injectHeaders = (providers) => {
+      if (!this.providerHeaders || !Array.isArray(providers)) return providers;
+      return providers.map(p => ({ ...p, headers: p.headers || this.providerHeaders }));
+    };
+
     // If fallback config is provided explicitly, use it
     if (this.fallbackConfig && this.fallbackConfig.providers) {
       try {
         this.fallbackManager = new FallbackManager({
           ...this.fallbackConfig,
+          providers: injectHeaders(this.fallbackConfig.providers),
           debug: this.debug
         });
 
@@ -1422,6 +1431,9 @@ export class ProbeAgent {
     // Try to load from environment variables
     const envFallbackManager = createFallbackManagerFromEnv(this.debug);
     if (envFallbackManager) {
+      if (this.providerHeaders) {
+        envFallbackManager.providers = injectHeaders(envFallbackManager.providers);
+      }
       this.fallbackManager = envFallbackManager;
       if (this.debug) {
         console.log(`[DEBUG] Fallback manager initialized from environment variables`);
@@ -1431,10 +1443,10 @@ export class ProbeAgent {
 
     // Auto-build fallback from available providers if enabled
     if (process.env.AUTO_FALLBACK === '1' || this.fallbackConfig?.auto) {
-      const providers = buildFallbackProvidersFromEnv({
+      const providers = injectHeaders(buildFallbackProvidersFromEnv({
         primaryProvider,
         primaryModel
-      });
+      }));
 
       if (providers.length > 1) {
         try {
@@ -1903,7 +1915,7 @@ export class ProbeAgent {
    * Initialize Anthropic model
    */
   initializeAnthropicModel(apiKey, apiUrl, modelName) {
-    this.provider = createProviderInstance({ provider: 'anthropic', apiKey, ...(apiUrl && { baseURL: apiUrl }) });
+    this.provider = createProviderInstance({ provider: 'anthropic', apiKey, ...(apiUrl && { baseURL: apiUrl }), ...(this.providerHeaders && { headers: this.providerHeaders }) });
     this.model = modelName || DEFAULT_MODELS.anthropic;
     this.apiType = 'anthropic';
 
@@ -1916,7 +1928,7 @@ export class ProbeAgent {
    * Initialize OpenAI model
    */
   initializeOpenAIModel(apiKey, apiUrl, modelName) {
-    this.provider = createProviderInstance({ provider: 'openai', apiKey, ...(apiUrl && { baseURL: apiUrl }) });
+    this.provider = createProviderInstance({ provider: 'openai', apiKey, ...(apiUrl && { baseURL: apiUrl }), ...(this.providerHeaders && { headers: this.providerHeaders }) });
     this.model = modelName || DEFAULT_MODELS.openai;
     this.apiType = 'openai';
 
@@ -1929,7 +1941,7 @@ export class ProbeAgent {
    * Initialize Google model
    */
   initializeGoogleModel(apiKey, apiUrl, modelName) {
-    this.provider = createProviderInstance({ provider: 'google', apiKey, ...(apiUrl && { baseURL: apiUrl }) });
+    this.provider = createProviderInstance({ provider: 'google', apiKey, ...(apiUrl && { baseURL: apiUrl }), ...(this.providerHeaders && { headers: this.providerHeaders }) });
     this.model = modelName || 'gemini-2.5-pro';
     this.apiType = 'google';
 
@@ -2472,7 +2484,7 @@ export class ProbeAgent {
    */
   initializeBedrockModel(accessKeyId, secretAccessKey, region, sessionToken, apiKey, baseURL, modelName) {
     this.provider = createProviderInstance({
-      provider: 'bedrock', apiKey, accessKeyId, secretAccessKey, sessionToken, region, baseURL
+      provider: 'bedrock', apiKey, accessKeyId, secretAccessKey, sessionToken, region, baseURL, ...(this.providerHeaders && { headers: this.providerHeaders })
     });
     this.model = modelName || DEFAULT_MODELS.bedrock;
     this.apiType = 'bedrock';
@@ -5789,6 +5801,7 @@ Double-check your response based on the criteria above. If everything looks good
       cwd: this.cwd, // Preserve explicit working directory
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      providerHeaders: this.providerHeaders,
       requestTimeout: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
       debug: this.debug,
       outline: this.outline,
