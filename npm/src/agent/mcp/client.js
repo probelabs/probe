@@ -11,6 +11,27 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { loadMCPConfiguration, parseEnabledServers, DEFAULT_TIMEOUT } from './config.js';
 
 /**
+ * Recursively sanitize a JSON Schema so it is accepted by all major LLM providers.
+ * Gemini rejects boolean values inside `enum` arrays and boolean `const` fields
+ * (the AI SDK converts `const: <bool>` → `enum: [<bool>]`).  We also strip
+ * `additionalProperties` (a boolean) since Gemini does not support it and the
+ * AI SDK may not strip it from externally-supplied MCP schemas.
+ */
+function sanitizeSchemaForProvider(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  try {
+    return JSON.parse(JSON.stringify(schema), (key, value) => {
+      if (key === 'additionalProperties' && typeof value === 'boolean') return undefined;
+      if (key === 'const' && typeof value === 'boolean') return undefined;
+      if (key === '$schema') return undefined;
+      return value;
+    });
+  } catch {
+    return schema;
+  }
+}
+
+/**
  * Check if a method is allowed based on server's method filter configuration
  * Supports wildcard patterns (e.g., "*_read", "search_*", "prefix_*_suffix")
  * @param {string} methodName - The method name to check
@@ -591,7 +612,7 @@ export class MCPClientManager {
       // Create a wrapper that calls the MCP tool
       tools[name] = {
         description: tool.description,
-        inputSchema: tool.inputSchema,
+        inputSchema: sanitizeSchemaForProvider(tool.inputSchema),
         execute: async (args) => {
           const result = await this.callTool(name, args);
           if (!result.content || !result.content[0]) {
