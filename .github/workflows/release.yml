@@ -72,7 +72,7 @@ jobs:
       - name: Install cross (for musl targets)
         if: contains(matrix.target, 'unknown-linux-musl')
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
+          cargo install cross --force --git https://github.com/cross-rs/cross
 
       - name: Pin aegis for x86_64 musl compatibility
         if: matrix.target == 'x86_64-unknown-linux-musl'
