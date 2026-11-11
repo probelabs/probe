@@ -406,6 +406,9 @@ export async function delegate({
 	timeoutBehavior = undefined,
 	requestTimeout = undefined,
 	gracefulTimeoutBonusSteps = undefined,
+	negotiatedTimeoutBudget = undefined,
+	negotiatedTimeoutMaxRequests = undefined,
+	negotiatedTimeoutMaxPerRequest = undefined,
 	// Subagent lifecycle callbacks for graceful stop coordination
 	onSubagentCreated = null,
 	onSubagentCompleted = null,
@@ -516,6 +519,9 @@ export async function delegate({
 			timeoutBehavior: timeoutBehavior || 'graceful',
 			requestTimeout,
 			gracefulTimeoutBonusSteps: gracefulTimeoutBonusSteps ?? 2, // fewer steps for subagents
+			...(negotiatedTimeoutBudget !== undefined && { negotiatedTimeoutBudget }),
+			...(negotiatedTimeoutMaxRequests !== undefined && { negotiatedTimeoutMaxRequests }),
+			...(negotiatedTimeoutMaxPerRequest !== undefined && { negotiatedTimeoutMaxPerRequest }),
 		});
 
 		// Register subagent with parent for graceful stop coordination

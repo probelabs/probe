@@ -1288,6 +1288,9 @@ export const delegateTool = (options = {}) => {
 				timeoutBehavior,
 				requestTimeout,
 				gracefulTimeoutBonusSteps,
+				negotiatedTimeoutBudget,
+				negotiatedTimeoutMaxRequests,
+				negotiatedTimeoutMaxPerRequest,
 				// Subagent lifecycle callbacks for graceful stop coordination
 				onSubagentCreated,
 				onSubagentCompleted,
