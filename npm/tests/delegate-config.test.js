@@ -439,4 +439,60 @@ describe('Delegate Tool Configuration', () => {
       expect('--no-mermaid-validation').toMatch(/^--no-[a-z-]+$/);
     });
   });
+
+  describe('Negotiated Timeout Forwarding', () => {
+    it('should forward negotiated timeout settings from parent to delegate', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 600,
+        timeoutBehavior: 'negotiated',
+        negotiatedTimeoutBudget: 3600000,
+        negotiatedTimeoutMaxRequests: 3,
+        negotiatedTimeoutMaxPerRequest: 1200000,
+      });
+
+      await tool.execute({ task: 'Long running engineering task' });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutBehavior: 'negotiated',
+          negotiatedTimeoutBudget: 3600000,
+          negotiatedTimeoutMaxRequests: 3,
+          negotiatedTimeoutMaxPerRequest: 1200000,
+        })
+      );
+    });
+
+    it('should forward graceful timeout settings', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300,
+        timeoutBehavior: 'graceful',
+        requestTimeout: 60000,
+        gracefulTimeoutBonusSteps: 4,
+      });
+
+      await tool.execute({ task: 'Standard task' });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutBehavior: 'graceful',
+          requestTimeout: 60000,
+          gracefulTimeoutBonusSteps: 4,
+        })
+      );
+    });
+
+    it('should not include negotiated settings when not configured', async () => {
+      const tool = delegateTool({ debug: false, timeout: 300 });
+
+      await tool.execute({ task: 'Simple task' });
+
+      const callArgs = mockDelegate.mock.calls[0][0];
+      expect(callArgs.timeoutBehavior).toBeUndefined();
+      expect(callArgs.negotiatedTimeoutBudget).toBeUndefined();
+      expect(callArgs.negotiatedTimeoutMaxRequests).toBeUndefined();
+      expect(callArgs.negotiatedTimeoutMaxPerRequest).toBeUndefined();
+    });
+  });
 });
