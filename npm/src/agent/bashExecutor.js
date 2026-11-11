@@ -4,9 +4,47 @@
  */
 
 import { resolve } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { parseCommandForExecution, isComplexCommand } from './bashCommandUtils.js';
 import { spawnGovernedProcess } from './processSupervisor.js';
+
+/**
+ * Cache of the initial process env read from /proc/self/environ.
+ * Used to avoid copying inflated process.env (from concurrent withTemporaryEnv)
+ * into child spawn calls, which can push past ARG_MAX and cause E2BIG.
+ */
+let _stableBashEnv = null;
+function getStableBashEnv() {
+  if (!_stableBashEnv) {
+    _stableBashEnv = {};
+    try {
+      const raw = readFileSync('/proc/self/environ', 'utf8');
+      for (const entry of raw.split('\0')) {
+        const eq = entry.indexOf('=');
+        if (eq > 0) {
+          _stableBashEnv[entry.substring(0, eq)] = entry.substring(eq + 1);
+        }
+      }
+    } catch {
+      for (const [k, v] of Object.entries(process.env)) {
+        if (v !== undefined) _stableBashEnv[k] = v;
+      }
+    }
+  }
+  // Merge in dynamic vars set after startup
+  const result = { ..._stableBashEnv };
+  for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_CONFIG_COUNT',
+                      'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
+    const v = process.env[key];
+    if (v !== undefined) result[key] = v;
+  }
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith('GIT_CONFIG_') && v !== undefined) {
+      result[k] = v;
+    }
+  }
+  return result;
+}
 
 // ─── Interactive Command Detection ─────────────────────────────────────────
 
@@ -265,8 +303,10 @@ export async function executeBashCommand(command, options = {}) {
     // Create environment with non-interactive safety defaults.
     // These prevent commands from opening editors or TTY prompts
     // when stdin is not available (which would cause hangs).
+    // Use stable initial env instead of process.env to avoid E2BIG when
+    // concurrent tasks have inflated process.env via withTemporaryEnv()
     const processEnv = {
-      ...process.env,
+      ...getStableBashEnv(),
       ...env
     };
     // Only set defaults if not already provided by user config

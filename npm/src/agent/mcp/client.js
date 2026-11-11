@@ -9,6 +9,50 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { loadMCPConfiguration, parseEnabledServers, DEFAULT_TIMEOUT } from './config.js';
+import { readFileSync } from 'fs';
+
+/**
+ * Return the process's initial environment (from /proc/self/environ) plus
+ * a handful of vars that are set after startup (GitHub auth, GIT_CONFIG).
+ *
+ * Using the static initial env instead of process.env avoids copying
+ * transient vars injected by concurrent withTemporaryEnv() calls, which
+ * can bloat the env past ARG_MAX and cause E2BIG on child spawns.
+ */
+let _stableEnv = null;
+function getStableProcessEnv() {
+  if (!_stableEnv) {
+    _stableEnv = {};
+    try {
+      const raw = readFileSync('/proc/self/environ', 'utf8');
+      for (const entry of raw.split('\0')) {
+        const eq = entry.indexOf('=');
+        if (eq > 0) {
+          _stableEnv[entry.substring(0, eq)] = entry.substring(eq + 1);
+        }
+      }
+    } catch {
+      // /proc not available (non-Linux) — fall back to process.env snapshot
+      for (const [k, v] of Object.entries(process.env)) {
+        if (v !== undefined) _stableEnv[k] = v;
+      }
+    }
+  }
+  // Merge in dynamic vars set after startup
+  const result = { ..._stableEnv };
+  for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_CONFIG_COUNT',
+                      'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
+    const v = process.env[key];
+    if (v !== undefined) result[key] = v;
+  }
+  // Copy GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* entries
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith('GIT_CONFIG_') && v !== undefined) {
+      result[k] = v;
+    }
+  }
+  return result;
+}
 
 /**
  * Recursively sanitize a JSON Schema so it is accepted by all major LLM providers.
@@ -86,12 +130,20 @@ export function createTransport(serverConfig) {
   }
 
   switch (transport) {
-    case 'stdio':
+    case 'stdio': {
+      // Build env from /proc/self/environ (the static initial env) instead of
+      // process.env which can be inflated by concurrent tasks and cause E2BIG.
+      let mergedEnv = undefined;
+      if (env) {
+        const baseEnv = getStableProcessEnv();
+        mergedEnv = { ...baseEnv, ...env };
+      }
       return new StdioClientTransport({
         command,
         args: args || [],
-        env: env ? { ...process.env, ...env } : undefined
+        env: mergedEnv
       });
+    }
 
     case 'sse':
       if (!url) {
