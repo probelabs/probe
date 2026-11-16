@@ -11,6 +11,7 @@ use ignore::WalkBuilder;
 use probe_code::file_guard;
 use probe_code::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -66,6 +67,31 @@ impl Language for ProbeQueryLang {
             ProbeQueryLang::Solidity => tree_sitter_solidity::LANGUAGE.into(),
             ProbeQueryLang::Crystal => tree_sitter_crystal::LANGUAGE.into(),
             ProbeQueryLang::Qml => tree_sitter_qmljs::LANGUAGE.into(),
+        }
+    }
+
+    // Languages whose identifiers cannot contain `$` (Go, Python, C, ...) rewrite `$X` to an
+    // expando character before parsing a pattern. ast-grep's built-in languages do this in
+    // these methods, so they must be passed through, or every pattern with a meta variable
+    // fails to parse in those languages and matches nothing.
+    fn pre_process_pattern<'q>(&self, query: &'q str) -> Cow<'q, str> {
+        match self {
+            ProbeQueryLang::Builtin(lang) => lang.pre_process_pattern(query),
+            _ => Cow::Borrowed(query),
+        }
+    }
+
+    fn meta_var_char(&self) -> char {
+        match self {
+            ProbeQueryLang::Builtin(lang) => lang.meta_var_char(),
+            _ => '$',
+        }
+    }
+
+    fn expando_char(&self) -> char {
+        match self {
+            ProbeQueryLang::Builtin(lang) => lang.expando_char(),
+            _ => self.meta_var_char(),
         }
     }
 }
@@ -993,6 +1019,52 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_go_query_meta_variables() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("access.go");
+        fs::write(
+            &file,
+            r#"package gateway
+
+func check(session SessionState) bool {
+	if len(session.AllowedURLs) == 0 {
+		return false
+	}
+	return true
+}
+"#,
+        )
+        .unwrap();
+
+        for pattern in [
+            "len($X.AllowedURLs)",
+            "len($X.AllowedURLs) == 0",
+            "func $NAME($$$) bool { $$$ }",
+        ] {
+            let options = QueryOptions {
+                path: temp_dir.path(),
+                pattern,
+                language: Some("go"),
+                ignore: &[],
+                allow_tests: true,
+                max_results: Some(10),
+                format: "json",
+                no_gitignore: true,
+                with_context: false,
+                strict: false,
+                text_extensions: &[],
+            };
+
+            let matches = perform_query(&options).expect("Go query should run");
+            assert!(
+                !matches.is_empty(),
+                "Go pattern {pattern:?} should match, as it does in ast-grep"
+            );
+            assert_eq!(matches[0].file_path, file);
+        }
+    }
 
     #[test]
     fn test_bash_query_support() {
