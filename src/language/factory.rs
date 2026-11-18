@@ -17,6 +17,7 @@ use probe_code::language::ruby::RubyLanguage;
 use probe_code::language::rust::RustLanguage;
 use probe_code::language::solidity::SolidityLanguage;
 use probe_code::language::swift::SwiftLanguage;
+use probe_code::language::toml::TomlLanguage;
 use probe_code::language::typescript::TypeScriptLanguage;
 use probe_code::language::yaml::YamlLanguage;
 
@@ -104,6 +105,7 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         "html" | "htm" => Some(Box::new(HtmlLanguage::new())),
         "md" | "markdown" => Some(Box::new(MarkdownLanguage::new())),
         "yaml" | "yml" => Some(Box::new(YamlLanguage::new())),
+        "toml" => Some(Box::new(TomlLanguage)),
         "sh" | "bash" => Some(Box::new(BashLanguage::new())),
         "qml" => Some(Box::new(QmlLanguage::new())),
         _ => None,
@@ -128,7 +130,10 @@ mod tests {
             shebang_language_extension("#!/usr/bin/env -S bash -e"),
             Some("sh")
         );
-        assert_eq!(shebang_language_extension("#!/bin/bash -euo pipefail"), Some("sh"));
+        assert_eq!(
+            shebang_language_extension("#!/bin/bash -euo pipefail"),
+            Some("sh")
+        );
         assert_eq!(
             shebang_language_extension("#!/bin/sh\r"),
             Some("sh"),
@@ -157,10 +162,7 @@ mod tests {
     fn effective_extension_prefers_real_extension() {
         use std::path::Path;
         // Real extension wins; no sniffing needed.
-        assert_eq!(
-            effective_extension(Path::new("deploy.sh"), None),
-            "sh"
-        );
+        assert_eq!(effective_extension(Path::new("deploy.sh"), None), "sh");
         assert_eq!(
             effective_extension(Path::new("deploy.sh"), Some("#!/usr/bin/python3")),
             "sh",
@@ -168,10 +170,7 @@ mod tests {
         );
         // Extensionless + shell shebang -> synthetic "sh".
         assert_eq!(
-            effective_extension(
-                Path::new("bin/omarchy-menu"),
-                Some("#!/usr/bin/env bash")
-            ),
+            effective_extension(Path::new("bin/omarchy-menu"), Some("#!/usr/bin/env bash")),
             "sh"
         );
         // Extensionless without shell shebang -> unaffected.

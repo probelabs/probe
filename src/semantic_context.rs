@@ -105,6 +105,7 @@ pub fn language_name_for_path(path: &Path) -> Option<&'static str> {
         "html" | "htm" => Some("html"),
         "md" | "markdown" => Some("markdown"),
         "yaml" | "yml" => Some("yaml"),
+        "toml" => Some("toml"),
         _ => None,
     }
 }

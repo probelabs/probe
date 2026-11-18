@@ -1047,6 +1047,7 @@ pub fn get_language_from_extension(extension: &str) -> &'static str {
         "md" => "markdown",
         "json" => "json",
         "yaml" | "yml" => "yaml",
+        "toml" => "toml",
         "html" => "html",
         "css" => "css",
         "sql" => "sql",

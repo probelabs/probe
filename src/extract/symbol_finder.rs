@@ -27,6 +27,9 @@ fn get_qualified_name<'a>(
                     || child.kind() == "field_identifier"
                     || child.kind() == "constant"
                     || child.kind() == "name"
+                    || child.kind() == "bare_key"
+                    || child.kind() == "quoted_key"
+                    || child.kind() == "dotted_key"
                 {
                     if let Ok(name) = child.utf8_text(content) {
                         // Skip if the parent's name is the same as the symbol
@@ -63,8 +66,7 @@ fn find_all_symbol_nodes<'a>(
     let mut found_here = false;
 
     // Check if this node is an acceptable parent (function, struct, class, etc.).
-    // Haskell operator definitions can be represented only by a signature node,
-    // so Haskell callers also opt into language-level symbol nodes.
+    // Haskell signatures and TOML keys can be symbols without being block boundaries.
     if language_impl.is_acceptable_parent(&node)
         || (include_symbol_nodes && language_impl.is_symbol_node(&node))
     {
@@ -98,6 +100,9 @@ fn find_all_symbol_nodes<'a>(
                 || child.kind() == "module_id"
                 || child.kind() == "field_name"
                 || child.kind() == "prefix_id"
+                || child.kind() == "bare_key"
+                || child.kind() == "quoted_key"
+                || child.kind() == "dotted_key"
             // PHP uses "name" for identifiers
             {
                 if let Ok(name) = child.utf8_text(content) {
@@ -107,21 +112,32 @@ fn find_all_symbol_nodes<'a>(
                         );
                     }
 
-                    if name == current_symbol {
-                        if is_nested {
+                    let matched_parts =
+                        if matches!(child.kind(), "bare_key" | "quoted_key" | "dotted_key") {
+                            let target = symbol_parts.join(".");
+                            (target == name
+                                || target
+                                    .strip_prefix(name)
+                                    .is_some_and(|rest| rest.starts_with('.')))
+                            .then(|| name.split('.').count())
+                        } else {
+                            (name == current_symbol).then_some(1)
+                        };
+                    if let Some(matched_parts) = matched_parts {
+                        if matched_parts < symbol_parts.len() {
                             // Found the parent container — search within it for the child symbol
                             if debug_mode {
                                 println!(
                                     "[DEBUG] [find_all] Found parent '{}', searching for child '{}'",
                                     current_symbol,
-                                    symbol_parts[1]
+                                    symbol_parts[matched_parts]
                                 );
                             }
                             let mut inner_cursor = node.walk();
                             for inner_child in node.children(&mut inner_cursor) {
                                 find_all_symbol_nodes(
                                     inner_child,
-                                    &symbol_parts[1..],
+                                    &symbol_parts[matched_parts..],
                                     language_impl,
                                     content,
                                     debug_mode,
@@ -365,8 +381,7 @@ pub fn find_all_symbols_in_file(
 
     // Get the effective file extension to determine the language
     // (extensionless shell scripts resolve via first-line shebang sniffing)
-    let extension =
-        crate::language::factory::effective_extension(path, content.lines().next());
+    let extension = crate::language::factory::effective_extension(path, content.lines().next());
 
     // Get the language implementation for this extension
     let language_impl = match crate::language::factory::get_language_impl(extension) {
@@ -435,7 +450,7 @@ pub fn find_all_symbols_in_file(
     crate::language::return_pooled_parser(extension, parser);
 
     let root_node = tree.root_node();
-    let include_symbol_nodes = matches!(extension, "hs" | "lhs");
+    let include_symbol_nodes = matches!(extension, "hs" | "lhs" | "toml");
 
     if debug_mode {
         println!("[DEBUG] File parsed successfully");
@@ -541,7 +556,7 @@ pub fn find_all_symbols_in_file(
         .into_iter()
         .map(|found_node| {
             let node_start_line = found_node.start_position().row + 1;
-            let node_end_line = found_node.end_position().row + 1;
+            let node_end_line = crate::language::common::node_end_row(&found_node) + 1;
             let node_text = &content[found_node.start_byte()..found_node.end_byte()];
             let node_text_str = node_text.to_string();
 

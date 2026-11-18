@@ -474,6 +474,7 @@ cargo install --path .
 | Markdown | `.md` |
 | HTML | `.html`, `.htm` |
 | YAML | `.yaml`, `.yml` |
+| TOML | `.toml` |
 | Bash | `.sh`, `.bash` |
 | QML | `.qml` |
 

@@ -173,6 +173,7 @@ pub enum Commands {
             "haskell", "hs", "lhs",
             "csharp", "cs",
             "yaml", "yml",
+            "toml",
             "bash", "sh",
             "qml"
         ])]

@@ -4,6 +4,7 @@ use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser as TSParser};
 
+use probe_code::language::common::node_end_row;
 use probe_code::language::factory::get_language_impl;
 use probe_code::language::language_trait::LanguageImpl;
 use probe_code::language::tree_cache;
@@ -90,7 +91,6 @@ impl SparseLineMap {
     }
 
     /// Check if a line is within any populated range
-    #[allow(dead_code)]
     fn is_populated(&self, line: usize) -> bool {
         self.populated_ranges
             .iter()
@@ -191,7 +191,7 @@ impl CachedNodeInfo {
                 .map(|parent_node| {
                     let parent_type = parent_node.kind().to_string();
                     let parent_start = parent_node.start_position().row;
-                    let parent_end = parent_node.end_position().row;
+                    let parent_end = node_end_row(&parent_node);
                     (parent_type, parent_start, parent_end)
                 })
         } else {
@@ -211,7 +211,7 @@ impl CachedNodeInfo {
             start_byte: info.node.start_byte(),
             end_byte: info.node.end_byte(),
             start_row: info.node.start_position().row,
-            end_row: info.node.end_position().row,
+            end_row: node_end_row(&info.node),
             node_kind: info.node.kind().to_string(),
             is_comment: info.is_comment,
             is_test: info.is_test, // Original node test status
@@ -220,7 +220,7 @@ impl CachedNodeInfo {
             context_node_bytes: info.context_node.map(|n| (n.start_byte(), n.end_byte())),
             context_node_rows: info
                 .context_node
-                .map(|n| (n.start_position().row, n.end_position().row)),
+                .map(|n| (n.start_position().row, node_end_row(&n))),
             context_node_kind: info.context_node.map(|n| n.kind().to_string()),
             context_node_is_test: context_test, // Context node test status
             // specificity: info.specificity, // Original node specificity - REMOVED (unused)
@@ -607,7 +607,7 @@ fn process_node_sparse<'a>(
     target_ranges: &[(usize, usize)],
 ) {
     let start_row = node.start_position().row;
-    let end_row = node.end_position().row;
+    let end_row = node_end_row(&node);
 
     // OPTIMIZATION: Early filtering - skip nodes that don't intersect with any target ranges
     let mut intersects_target = false;
@@ -756,7 +756,7 @@ fn process_node<'a>(
     line_map_base_offset: usize,           // OPTIMIZATION: Base offset for the line_map indexing
 ) {
     let start_row = node.start_position().row;
-    let end_row = node.end_position().row;
+    let end_row = node_end_row(&node);
 
     // OPTIMIZATION: Early filtering - skip nodes that don't intersect with any target line ranges
     let mut intersects_target = false;
@@ -1864,15 +1864,20 @@ pub fn parse_file_for_code_blocks_with_tree(
             eprintln!("DEBUG: Sparse cache hit for line_map key: {cache_key}");
         }
 
-        // Process the sparse cached line map
-        return process_sparse_line_map(
-            cached_entry.value(),
-            line_numbers,
-            language_impl.as_ref(),
-            content,
-            allow_tests,
-            debug_mode,
-        );
+        // A sparse map only covers the lines requested by earlier calls.
+        if line_numbers
+            .iter()
+            .all(|line| cached_entry.is_populated(line.saturating_sub(1)))
+        {
+            return process_sparse_line_map(
+                cached_entry.value(),
+                line_numbers,
+                language_impl.as_ref(),
+                content,
+                allow_tests,
+                debug_mode,
+            );
+        }
     }
 
     if debug_mode {

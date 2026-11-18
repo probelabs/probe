@@ -30,6 +30,7 @@ pub mod ruby;
 pub mod rust;
 pub mod solidity;
 pub mod swift;
+pub mod toml;
 pub mod typescript;
 pub mod yaml;
 

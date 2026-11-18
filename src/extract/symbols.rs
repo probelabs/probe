@@ -186,6 +186,8 @@ fn is_container_node(kind: &str) -> bool {
             | "class_body"
             | "body_statement"
             | "block"
+            | "table"
+            | "table_array_element"
     )
 }
 
@@ -223,7 +225,7 @@ fn collect_symbols(
             let name = extract_symbol_name(&semantic_child, source);
             let kind = normalize_kind(semantic_child.kind());
             let start_line = semantic_child.start_position().row + 1;
-            let end_line = semantic_child.end_position().row + 1;
+            let end_line = crate::language::common::node_end_row(&semantic_child) + 1;
 
             // Recursively collect children for container nodes
             let children = if is_container_node(semantic_child.kind()) && depth < MAX_SYMBOL_DEPTH {
@@ -384,6 +386,9 @@ fn extract_symbol_name(node: &Node, source: &[u8]) -> String {
                 | "module_id"
                 | "field_name"
                 | "prefix_id"
+                | "bare_key"
+                | "quoted_key"
+                | "dotted_key"
         ) {
             if let Ok(text) = child.utf8_text(source) {
                 return text.to_string();

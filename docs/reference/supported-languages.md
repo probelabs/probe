@@ -24,6 +24,7 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
 | YAML | `.yaml`, `.yml` | ✅ | ✅ |
+| TOML | `.toml` | ✅ | ✅ |
 | Bash | `.sh`, `.bash` | ✅ | ✅ |
 | QML | `.qml` | ✅ | ✅ |
 
@@ -173,6 +174,15 @@ Go also implements special handling for nested struct types.
 - **Document Structure**: Handles multi-document YAML streams
 - **Anchor and Alias Support**: Properly handles YAML anchors and aliases
 - **Test Detection**: Identifies test-related configuration keys and values
+
+### TOML
+
+TOML search and line extraction return the enclosing `[table]` or `[[array.of.tables]]`
+entry, keeping configuration values with their header and sibling settings. Root-level
+key/value pairs are extracted as complete pairs, including multiline values. `symbols`
+lists tables and their keys. For example, `probe extract dbhub.toml:12` keeps a matched
+SQL statement with its tool name, source, and read-only setting. AST `query` and LSP
+integration are not included for TOML.
 
 ### Bash
 
