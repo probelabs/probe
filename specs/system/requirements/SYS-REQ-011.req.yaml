@@ -1,0 +1,41 @@
+id: SYS-REQ-011
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: ""
+description: Each unsafe block in lsp-daemon (daemon.rs, server_manager.rs) shall carry an inline SAFETY comment naming the precondition the surrounding code maintains; unsafe code without a documented invariant is forbidden.
+formalization_strategy: informal
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+component: lsp_daemon_unsafe
+rationale: lsp-daemon contains 2 unsafe blocks (FFI / raw pointer use); per Rust safety culture each must be audit-traceable.
+tags:
+    - unsafe
+    - memory_safety
+variables: []
+traces:
+    satisfies:
+        - SYS-REQ-002
+    verified_by_extra:
+        - lsp-daemon/src/daemon.rs
+    implemented_by_extra:
+        - lsp-daemon/src/daemon.rs
+        - lsp-daemon/src/server_manager.rs
+verification:
+    assurance_level: E
+    formalization_status: none
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T07:26:52Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T07:26:52Z"
+obligation_class: unsafe_block_documented
